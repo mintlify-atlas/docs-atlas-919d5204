@@ -1,0 +1,76 @@
+---
+title: "Introduction"
+description: "HideMe is confidential token infrastructure on Ethereum. Balances and transfer amounts are encrypted on-chain using Fully Homomorphic Encryption, invisible to block explorers and third parties."
+---
+
+HideMe brings financial privacy to Ethereum without leaving the chain. Every balance and every transfer amount is stored as an FHE ciphertext — invisible to block explorers, indexers, and anyone who isn't the account holder. You get the composability of ERC-20 with the privacy of fully encrypted state.
+
+## The problem with public ERC-20 balances
+
+Standard ERC-20 tokens store balances in a plain `mapping(address => uint256)`. Anyone can query the chain and see exactly how much any address holds. Transfer amounts are emitted in events and indexed by every analytics tool on the network.
+
+This means:
+- Your wallet balance is public to any counterparty you transact with
+- Every payment amount you send or receive is permanently visible on-chain
+- DeFi positions, payroll, and treasury management are exposed to competitors, MEV bots, and surveillance
+
+## What HideMe does differently
+
+HideMe stores balances as `euint64` ciphertexts — 64-bit unsigned integers encrypted with Fully Homomorphic Encryption via [Zama's fhEVM](https://docs.zama.ai/fhevm). The EVM performs arithmetic (addition, subtraction, comparison) directly on the encrypted values, without ever decrypting them. The result is a token that behaves like ERC-20 but leaks nothing about amounts.
+
+<Note>
+  HideMe contracts are deployed and verified on **Ethereum mainnet**. Every feature described in these docs has on-chain transaction evidence. See the [deployed addresses](/contracts/deployed-addresses) page for contract addresses and Etherscan links.
+</Note>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="FHE-encrypted balances" icon="lock" href="/how-it-works">
+    Balances are stored as `euint64` ciphertexts. Transfer amounts and balance checks run entirely on encrypted data — the EVM never sees a plaintext value.
+  </Card>
+  <Card title="Native confidential tokens" icon="coins" href="/features/token-registry">
+    HideMeToken is a purpose-built confidential ERC-20. Deploy tokens with configurable supply, mintability, burn rules, and compliance observers through the HideMeFactory registry.
+  </Card>
+  <Card title="ERC-20 wrapping" icon="arrow-right-arrow-left" href="/features/private-portfolio">
+    ConfidentialWrapper converts any standard ERC-20 into an encrypted cToken. cWETH and cUSDC are already deployed. Wrap your existing tokens to make them private.
+  </Card>
+  <Card title="Confidential payments" icon="paper-plane" href="/features/confidential-payments">
+    ConfidentialPaymentRouterV2 lets you send any ERC-20 where the amount is encrypted in transit. The receiver gets plain tokens — no FHE tooling required on their end.
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Payment links" icon="link" href="/features/payment-links">
+    Merchants create fixed-amount payment links for HideMeToken. Payers fulfill them through on-chain encrypted transfer with no coordination required off-chain.
+  </Card>
+  <Card title="Private portfolio management" icon="wallet" href="/features/private-portfolio">
+    Scan your wallet for both public ERC-20 balances and encrypted cToken balances. Decrypt all holdings with a single EIP-712 wallet signature — nothing sent to any server.
+  </Card>
+</CardGroup>
+
+## How it compares to standard tokens
+
+| Property | Standard ERC-20 | HideMe token |
+|---|---|---|
+| Balance visibility | Public (anyone can query) | Encrypted — only you and observers |
+| Transfer amount in events | Visible | Always emitted as `0` |
+| Arithmetic | Plaintext on-chain | FHE ciphertexts on-chain |
+| Balance check on transfer | Reverts if insufficient | Silent failure — sends `0` instead |
+| Compliance | Not built in | Optional observer addresses |
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Connect your wallet and make your first confidential transfer in a few steps.
+  </Card>
+  <Card title="How it works" icon="microchip" href="/how-it-works">
+    Understand the three-layer architecture and the FHE primitives that keep balances private.
+  </Card>
+  <Card title="Token registry" icon="list" href="/features/token-registry">
+    Browse deployed confidential tokens or create your own.
+  </Card>
+  <Card title="Smart contract reference" icon="file-code" href="/contracts/overview">
+    Explore the six contracts powering HideMe on mainnet.
+  </Card>
+</CardGroup>

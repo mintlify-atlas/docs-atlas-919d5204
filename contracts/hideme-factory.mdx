@@ -1,0 +1,116 @@
+---
+title: "HideMeFactory"
+description: "Deploys HideMeToken instances and maintains an on-chain registry of all confidential tokens. Anyone can create a token."
+---
+
+`HideMeFactory` is the entry point for creating confidential tokens. It deploys `HideMeToken` contracts, stores metadata on-chain, and provides paginated querying for the frontend token registry.
+
+**Mainnet address:** [`0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B`](https://etherscan.io/address/0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B)
+
+## createToken
+
+```solidity
+function createToken(CreateParams calldata p) external returns (address tokenAddr)
+```
+
+Deploy a new `HideMeToken` and register it in the factory. The caller becomes the token owner and receives the initial supply.
+
+### CreateParams
+
+<ParamField path="name" type="string" required>
+  Token name (e.g. `"My Private Token"`).
+</ParamField>
+<ParamField path="symbol" type="string" required>
+  Token symbol (e.g. `"MPT"`).
+</ParamField>
+<ParamField path="initialSupply" type="uint64" required>
+  Initial supply minted to the caller in raw units (6 decimals). Pass `0` to start with no supply.
+</ParamField>
+<ParamField path="observers" type="address[]" required>
+  Compliance addresses that can decrypt any holder's balance. Can be an empty array.
+</ParamField>
+<ParamField path="mintable" type="bool" required>
+  If `true`, the owner can call `mint()` to increase supply later.
+</ParamField>
+<ParamField path="burnable" type="bool" required>
+  If `true`, any holder can call `burn()` to destroy their tokens.
+</ParamField>
+<ParamField path="maxSupply" type="uint64" required>
+  Maximum total supply. Pass `0` for unlimited.
+</ParamField>
+<ParamField path="description" type="string" required>
+  Human-readable description stored as metadata.
+</ParamField>
+<ParamField path="logoUri" type="string" required>
+  URI pointing to the token logo image.
+</ParamField>
+<ParamField path="website" type="string" required>
+  Token project website URL.
+</ParamField>
+
+Returns the address of the newly deployed `HideMeToken`.
+
+## Registry queries
+
+```solidity
+function totalTokens() external view returns (uint256)
+function getAllTokens() external view returns (address[] memory)
+function getTokensByCreator(address creator) external view returns (address[] memory)
+function getTokensPaginated(uint256 offset, uint256 limit) external view returns (TokenInfo[] memory)
+```
+
+Use `getTokensPaginated` for the frontend registry to avoid loading all tokens in one call.
+
+## TokenInfo struct
+
+<ResponseField name="tokenAddress" type="address">
+  Deployed token contract address.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Token name.
+</ResponseField>
+<ResponseField name="symbol" type="string">
+  Token symbol.
+</ResponseField>
+<ResponseField name="initialSupply" type="uint64">
+  Initial supply set at creation.
+</ResponseField>
+<ResponseField name="creator" type="address">
+  Address that called `createToken`.
+</ResponseField>
+<ResponseField name="createdAt" type="uint256">
+  Block timestamp of token creation.
+</ResponseField>
+<ResponseField name="mintable" type="bool">
+  Whether the token owner can mint additional supply.
+</ResponseField>
+<ResponseField name="burnable" type="bool">
+  Whether holders can burn tokens.
+</ResponseField>
+<ResponseField name="maxSupply" type="uint64">
+  Maximum supply cap (`0` = unlimited).
+</ResponseField>
+<ResponseField name="description" type="string">
+  Token description metadata.
+</ResponseField>
+<ResponseField name="logoUri" type="string">
+  Logo URI metadata.
+</ResponseField>
+<ResponseField name="website" type="string">
+  Website URI metadata.
+</ResponseField>
+
+## Events
+
+| Event | Parameters |
+|-------|-----------|
+| `TokenCreated` | `creator, tokenAddress, name, symbol, initialSupply, mintable, burnable` |
+
+<CardGroup cols={2}>
+  <Card title="HideMeToken" icon="coins" href="/contracts/hideme-token">
+    Reference for the deployed token contract.
+  </Card>
+  <Card title="Token Registry" icon="list" href="/features/token-registry">
+    How the frontend uses the factory to display and create tokens.
+  </Card>
+</CardGroup>

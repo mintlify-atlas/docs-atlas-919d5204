@@ -1,0 +1,172 @@
+---
+title: "ConfidentialPaymentRouterV2"
+description: "One-click confidential payments. The sender's amount is encrypted on-chain; the receiver gets plain ERC-20 without ever touching FHE."
+---
+
+`ConfidentialPaymentRouterV2` lets you send any ERC-20 token where the transfer amount is hidden on Ethereum. You pay with plain ERC-20; the router wraps it into a cToken, transfers it encrypted, then unwraps it — the receiver gets standard ERC-20 with no FHE interaction required.
+
+**Mainnet address:** [`0x087D50Bb21a4C7A5E9394E9739809cB3AA6576Fa`](https://etherscan.io/address/0x087D50Bb21a4C7A5E9394E9739809cB3AA6576Fa)
+
+## Constants
+
+| Constant | Value |
+|----------|-------|
+| `MIN_RELAYER_FEE` | `0.00005 ETH` |
+| `PAYMENT_TIMEOUT` | `1 day` |
+
+## Payment flow
+
+```
+Sender: approve(token, router, amount)
+  → send(token, receiver, amount, memo) + MIN_RELAYER_FEE in ETH
+    → router pulls ERC-20 from sender
+    → router wraps ERC-20 into cToken (encrypted)
+    → router requests unwrap (KMS decryption triggered)
+
+Relayer: finalize(paymentId, handlesList, cleartexts, decryptionProof)
+  → KMS proof verified on-chain
+  → plain ERC-20 transferred to receiver
+  → relayer receives ETH fee
+```
+
+## send
+
+```solidity
+function send(
+    address token,
+    address receiver,
+    uint256 amount,
+    string calldata memo
+) external payable returns (uint256 paymentId)
+```
+
+Initiate a confidential payment. You must approve the router for `amount` of `token` before calling, and attach at least `MIN_RELAYER_FEE` in ETH.
+
+<ParamField path="token" type="address" required>
+  The ERC-20 token to send. A wrapper must exist in WrapperFactory (or the router will revert with `WrapperNotFound`).
+</ParamField>
+<ParamField path="receiver" type="address" required>
+  Who receives the plain ERC-20 after finalization.
+</ParamField>
+<ParamField path="amount" type="uint256" required>
+  Amount in the token's native decimals.
+</ParamField>
+<ParamField path="memo" type="string" required>
+  Human-readable note attached to the payment.
+</ParamField>
+
+Returns a `paymentId` used to track and finalize the payment. Estimated gas: ~1,500,000.
+
+## finalize
+
+```solidity
+function finalize(
+    uint256 paymentId,
+    bytes32[] calldata handlesList,
+    bytes calldata cleartexts,
+    bytes calldata decryptionProof
+) external
+```
+
+Submit the KMS decryption proof to complete the payment. **Permissionless** — anyone can call this, but the relayer is incentivized by the ETH fee.
+
+<ParamField path="paymentId" type="uint256" required>
+  The payment ID returned by `send()`.
+</ParamField>
+<ParamField path="handlesList" type="bytes32[]" required>
+  FHE ciphertext handles decrypted by the KMS.
+</ParamField>
+<ParamField path="cleartexts" type="bytes" required>
+  ABI-encoded decrypted values (the `canUnwrap` boolean).
+</ParamField>
+<ParamField path="decryptionProof" type="bytes" required>
+  Threshold KMS signatures verified via `FHE.checkSignatures()`.
+</ParamField>
+
+On success, the plain ERC-20 is transferred to the receiver, the payment is marked finalized, and the relayer receives the ETH fee.
+
+## cancel
+
+```solidity
+function cancel(uint256 paymentId) external
+```
+
+Cancel a payment after `PAYMENT_TIMEOUT` (1 day) if it has not been finalized. Only the original sender can cancel. The ERC-20 is returned and the ETH fee refunded.
+
+## getPayment
+
+```solidity
+function getPayment(uint256 paymentId) external view returns (
+    address sender, address receiver, address wrapper,
+    uint64 amount, uint256 unwrapRequestId, bytes32 handle,
+    uint256 relayerFee, string memory memo, uint256 createdAt,
+    bool finalized, bool cancelled
+)
+```
+
+## Payment struct fields
+
+<ResponseField name="sender" type="address">
+  Address that initiated the payment.
+</ResponseField>
+<ResponseField name="receiver" type="address">
+  Address that will receive the plain ERC-20.
+</ResponseField>
+<ResponseField name="wrapper" type="address">
+  The ConfidentialWrapper used for this payment.
+</ResponseField>
+<ResponseField name="amount" type="uint64">
+  Amount in 6-decimal cToken units.
+</ResponseField>
+<ResponseField name="unwrapRequestId" type="uint256">
+  The unwrap request ID in the ConfidentialWrapper contract.
+</ResponseField>
+<ResponseField name="handle" type="bytes32">
+  The `ebool` ciphertext handle for `canUnwrap`.
+</ResponseField>
+<ResponseField name="relayerFee" type="uint256">
+  ETH fee paid to the relayer on finalization.
+</ResponseField>
+<ResponseField name="memo" type="string">
+  Human-readable note.
+</ResponseField>
+<ResponseField name="createdAt" type="uint256">
+  Block timestamp of payment creation.
+</ResponseField>
+<ResponseField name="finalized" type="bool">
+  Whether the payment has been finalized.
+</ResponseField>
+<ResponseField name="cancelled" type="bool">
+  Whether the payment was cancelled.
+</ResponseField>
+
+## Events
+
+| Event | Parameters |
+|-------|-----------|
+| `PaymentCreated` | `paymentId, sender, receiver, wrapper, amount, memo` |
+| `PaymentUnwrapRequested` | `paymentId, unwrapRequestId, handle` |
+| `PaymentFinalized` | `paymentId, receiver, amount, success` |
+| `PaymentCancelled` | `paymentId, sender` |
+
+## Custom errors
+
+| Error | When thrown |
+|-------|------------|
+| `ZeroAddress` | `receiver` is `address(0)` |
+| `ZeroAmount` | `amount` is `0` |
+| `InsufficientRelayerFee` | `msg.value < MIN_RELAYER_FEE` |
+| `PaymentNotFound` | `paymentId` does not exist |
+| `PaymentAlreadyFinalized` | Payment already finalized or cancelled |
+| `WrapperNotFound` | No wrapper exists for the given token |
+| `NotSender` | Caller is not the payment sender (for `cancel`) |
+| `TooEarly` | Timeout not yet elapsed (for `cancel`) |
+
+<CardGroup cols={2}>
+  <Card title="Confidential Payments" icon="arrow-right-arrow-left" href="/features/confidential-payments">
+    How to use confidential payments from the frontend.
+  </Card>
+  <Card title="ConfidentialWrapper" icon="box" href="/contracts/confidential-wrapper">
+    The wrapper contract used internally by the router.
+  </Card>
+</CardGroup>

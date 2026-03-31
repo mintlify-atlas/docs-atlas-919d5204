@@ -1,0 +1,155 @@
+---
+title: "Encrypted Transfers"
+description: "Send HideMeToken amounts that are fully hidden on-chain using Zama FHE."
+---
+
+Every `HideMeToken` stores balances as `euint64` FHE ciphertexts. When you transfer tokens, the amount moves through the EVM entirely encrypted — no observer can determine how much was sent by reading on-chain state or events.
+
+HideMe supports two transfer modes depending on your integration environment:
+
+<CardGroup cols={2}>
+  <Card title="Client-side FHE" icon="lock">
+    You encrypt the amount in the browser using Zama's TFHE WASM library, then submit an encrypted handle and an input proof. The on-chain verifier checks the proof before processing the transfer.
+  </Card>
+  <Card title="On-chain Encryption" icon="server">
+    You pass a plaintext `uint64` amount. The EVM encrypts it via `FHE.asEuint64()` inside the contract. No browser WASM required.
+  </Card>
+</CardGroup>
+
+---
+
+## Transfer Functions
+
+### Client-side FHE transfer
+
+```solidity
+function transfer(
+    address to,
+    externalEuint64 encryptedAmount,
+    bytes calldata inputProof
+) external returns (bool);
+```
+
+Use this when you want the amount to be encrypted before it ever leaves the user's browser. You generate `encryptedAmount` (the ciphertext handle) and `inputProof` using the Zama Relayer SDK.
+
+### On-chain encryption transfer
+
+```solidity
+function transferPlaintext(address to, uint64 amount) external returns (bool);
+```
+
+The contract calls `FHE.asEuint64(amount)` to encrypt the value inside the EVM. The plaintext `amount` is visible in the calldata, but the resulting ciphertext stored on-chain is fully encrypted.
+
+<Tip>
+  Use `transferPlaintext` for simpler integrations — for example, backend services, scripts, or smart contract calls — where loading the TFHE WASM bundle in a browser is not feasible.
+</Tip>
+
+---
+
+## Encrypting an Amount Client-side
+
+The `encryptAmount()` TypeScript helper in `fhevm.ts` wraps the Zama Relayer SDK to produce the handle and proof you need for a client-side FHE transfer:
+
+```typescript
+export async function encryptAmount(
+  contractAddress: string,  // HideMeToken address
+  userAddress: string,       // Connected wallet address
+  amount: bigint,            // Amount in 6-decimal base units
+): Promise<{ handle: `0x${string}`; inputProof: `0x${string}` }>
+```
+
+Pass the returned `handle` and `inputProof` directly to `transfer()`:
+
+```typescript
+import { encryptAmount } from "@/lib/fhevm";
+
+const { handle, inputProof } = await encryptAmount(
+  tokenAddress,
+  account,
+  parseTokenAmount("10"), // 10 tokens → 10_000_000n
+);
+
+await writeContract({
+  address: tokenAddress,
+  abi: hideMeTokenAbi,
+  functionName: "transfer",
+  args: [recipientAddress, handle, inputProof],
+});
+```
+
+---
+
+## How the FHE Transfer Works
+
+Under the hood, `_transfer()` never decrypts any value. All arithmetic happens on ciphertexts:
+
+<Steps>
+  <Step title="Verify the encrypted input">
+    `FHE.fromExternal(encryptedAmount, inputProof)` decodes the client-side ciphertext and verifies the zero-knowledge input proof against the on-chain `InputVerifier` contract.
+  </Step>
+  <Step title="Check balance without leaking it">
+    `FHE.le(amount, balance)` computes an encrypted boolean `canTransfer` — true if the sender has enough funds. This comparison never reveals the balance or the transfer amount.
+  </Step>
+  <Step title="Select the actual transfer value">
+    `FHE.select(canTransfer, amount, FHE.asEuint64(0))` returns `amount` if `canTransfer` is true, otherwise `0`. Insufficient balance transfers silently send nothing rather than reverting — preventing balance probing through revert analysis.
+  </Step>
+  <Step title="Update both balances">
+    `FHE.sub(senderBalance, transferValue)` and `FHE.add(receiverBalance, transferValue)` update both ciphertext balances. `FHE.allow()` grants each party access to their updated ciphertext.
+  </Step>
+</Steps>
+
+```solidity
+// Internal transfer logic (simplified)
+ebool canTransfer = FHE.le(amount, _balances[from]);
+euint64 transferValue = FHE.select(canTransfer, amount, FHE.asEuint64(0));
+
+euint64 newBalanceFrom = FHE.sub(_balances[from], transferValue);
+euint64 newBalanceTo   = FHE.add(_balances[to],   transferValue);
+
+FHE.allow(newBalanceFrom, from);
+FHE.allow(newBalanceTo, to);
+
+emit Transfer(from, to, 0); // amount is always 0 in events
+```
+
+<Warning>
+  Transfer events always emit `amount = 0`. This is intentional — emitting the real amount would leak the encrypted value to anyone watching the chain.
+</Warning>
+
+---
+
+## Encrypted Allowances (approve / transferFrom)
+
+You can grant a spender an encrypted allowance using the same client-side FHE pattern:
+
+```solidity
+// Grant spender an encrypted allowance
+function approve(
+    address spender,
+    externalEuint64 encryptedAmount,
+    bytes calldata inputProof
+) external returns (bool);
+
+// Spend from an approved allowance
+function transferFrom(
+    address from,
+    address to,
+    externalEuint64 encryptedAmount,
+    bytes calldata inputProof
+) external returns (bool);
+```
+
+`transferFrom` verifies both `amount <= allowance` and `amount <= balance` as encrypted booleans before executing, so neither the allowance nor the balance is ever revealed on-chain.
+
+---
+
+## Contract-to-contract Transfers
+
+When another smart contract holds a `euint64` balance handle (e.g., a router or wrapper contract), it can transfer using the overloaded `transfer(address to, euint64 amount)` variant:
+
+```solidity
+// For contract-to-contract calls with an existing euint64 handle
+function transfer(address to, euint64 amount) external returns (bool);
+```
+
+The caller must have been granted FHE access to the `amount` handle via `FHE.allow()` before calling this function.

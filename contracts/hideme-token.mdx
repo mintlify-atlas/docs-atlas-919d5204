@@ -1,0 +1,197 @@
+---
+title: "HideMeToken"
+description: "The core confidential ERC-20 contract. Balances and transfer amounts are stored as FHE ciphertexts (euint64) — invisible on-chain without the owner's key."
+---
+
+`HideMeToken` is a confidential ERC-20-like token where every balance is an encrypted 64-bit integer (`euint64`) stored on Ethereum mainnet. Transfer amounts are encrypted, and events always emit `amount = 0` to prevent leakage.
+
+Each token is deployed by [HideMeFactory](/contracts/hideme-factory). The example mainnet instance is at [`0x02FA7116A5653dfDFe51cF83F587CB80F560145d`](https://etherscan.io/address/0x02FA7116A5653dfDFe51cF83F587CB80F560145d).
+
+## Key properties
+
+| Property | Value |
+|----------|-------|
+| Decimals | 6 (fixed) |
+| Balance type | `euint64` (FHE ciphertext) |
+| Transfer event amount | Always `0` (privacy) |
+| Solidity version | `^0.8.24` (compiled with `0.8.27`) |
+| License | MIT |
+
+## State variables
+
+<ResponseField name="name" type="string">
+  Token name, set at deployment.
+</ResponseField>
+<ResponseField name="symbol" type="string">
+  Token symbol, set at deployment.
+</ResponseField>
+<ResponseField name="decimals" type="uint8">
+  Always `6`.
+</ResponseField>
+<ResponseField name="totalSupply" type="uint64">
+  Plaintext total supply. Updated on mint/burn.
+</ResponseField>
+<ResponseField name="owner" type="address">
+  Current owner. Can mint (if mintable), add/remove observers, transfer or renounce ownership.
+</ResponseField>
+<ResponseField name="mintable" type="bool">
+  Whether the owner can mint additional tokens.
+</ResponseField>
+<ResponseField name="burnable" type="bool">
+  Whether holders can burn their own tokens.
+</ResponseField>
+<ResponseField name="maxSupply" type="uint64">
+  Maximum total supply cap. `0` = unlimited.
+</ResponseField>
+
+## Functions
+
+### transfer (client-side FHE)
+
+```solidity
+function transfer(
+    address to,
+    externalEuint64 encryptedAmount,
+    bytes calldata inputProof
+) external returns (bool)
+```
+
+Transfer using an amount encrypted client-side with TFHE WASM. The `encryptedAmount` handle and `inputProof` are produced by `encryptAmount()` in the frontend SDK.
+
+<ParamField path="to" type="address" required>
+  Recipient address. Cannot be `address(0)`.
+</ParamField>
+<ParamField path="encryptedAmount" type="externalEuint64" required>
+  Encrypted amount handle produced by the client-side TFHE library.
+</ParamField>
+<ParamField path="inputProof" type="bytes" required>
+  Input verification proof from the Zama InputVerifier contract.
+</ParamField>
+
+### transfer (euint64 handle)
+
+```solidity
+function transfer(address to, euint64 amount) external returns (bool)
+```
+
+Transfer using an already-on-chain `euint64` ciphertext. Used in contract-to-contract calls. The caller must be allowed on the `amount` handle (`FHE.isSenderAllowed`).
+
+### transferPlaintext
+
+```solidity
+function transferPlaintext(address to, uint64 amount) external returns (bool)
+```
+
+Transfer a plaintext amount that is encrypted inside the EVM via `FHE.asEuint64(amount)`. No browser WASM required. Useful for integrations and the payment links feature.
+
+### approve
+
+```solidity
+function approve(
+    address spender,
+    externalEuint64 encryptedAmount,
+    bytes calldata inputProof
+) external returns (bool)
+```
+
+Approve a spender for an encrypted allowance.
+
+### transferFrom
+
+```solidity
+function transferFrom(
+    address from,
+    address to,
+    externalEuint64 encryptedAmount,
+    bytes calldata inputProof
+) external returns (bool)
+```
+
+Transfer on behalf of `from` using an approved allowance. Both balance and allowance are checked with encrypted comparisons.
+
+### mint
+
+```solidity
+function mint(address to, uint64 amount) external
+```
+
+Mint new tokens. Only callable by the owner. Requires `mintable = true`. Reverts if `maxSupply > 0` and the new total would exceed it.
+
+### burn
+
+```solidity
+function burn(uint64 amount) external
+```
+
+Burn tokens from the caller's balance. Requires `burnable = true`. The encrypted comparison `FHE.le(amount, balance)` ensures a silent no-op if balance is insufficient.
+
+### addObserver / removeObserver
+
+```solidity
+function addObserver(address observer) external   // onlyOwner
+function removeObserver(address observer) external // onlyOwner
+```
+
+Observers can decrypt any holder's balance. Useful for compliance auditors or regulators. Observers are stored on-chain and receive FHE access permissions on every balance update.
+
+### transferOwnership / renounceOwnership
+
+```solidity
+function transferOwnership(address newOwner) external // onlyOwner
+function renounceOwnership() external                 // onlyOwner
+```
+
+Transfer or permanently renounce ownership. Renouncing disables minting and observer management.
+
+### balanceOf / allowance / getObservers
+
+```solidity
+function balanceOf(address account) external view returns (euint64)
+function allowance(address account, address spender) external view returns (euint64)
+function getObservers() external view returns (address[] memory)
+```
+
+Read encrypted balance/allowance handles. The returned `euint64` is a ciphertext — use the Zama decryption flow to read the actual value.
+
+## FHE transfer internals
+
+The internal `_transfer` function uses this pattern to prevent balance leakage:
+
+```solidity
+ebool canTransfer = FHE.le(amount, _balances[from]);
+euint64 transferValue = FHE.select(canTransfer, amount, FHE.asEuint64(0));
+// subtract transferValue from sender, add to receiver
+```
+
+If the sender has insufficient balance, `transferValue` evaluates to `0` — no revert, no information leak.
+
+## Events
+
+| Event | Parameters | Notes |
+|-------|-----------|-------|
+| `Transfer` | `from, to, amount` | `amount` is always `0` |
+| `Approval` | `owner, spender, amount` | `amount` is always `0` |
+| `ObserverAdded` | `observer, addedBy` | |
+| `ObserverRemoved` | `observer, removedBy` | |
+| `OwnershipTransferred` | `previousOwner, newOwner` | |
+| `OwnershipRenounced` | `previousOwner` | |
+
+## Custom errors
+
+| Error | When thrown |
+|-------|------------|
+| `ZeroAddress` | A required address parameter is `address(0)` |
+| `SenderNotAllowed` | Caller does not have FHE access on the provided `euint64` handle |
+| `OnlyOwner` | Caller is not the owner |
+| `MintingDisabled` | `mintable` is `false` |
+| `BurningDisabled` | `burnable` is `false` |
+| `ExceedsMaxSupply` | Mint would exceed `maxSupply` |
+
+<CardGroup cols={2}>
+  <Card title="HideMeFactory" icon="industry" href="/contracts/hideme-factory">
+    Deploy new HideMeToken instances.
+  </Card>
+  <Card title="Encrypted Transfers" icon="paper-plane" href="/features/encrypted-transfers">
+    How to use the transfer functions from the frontend.
+  </Card>
+</CardGroup>

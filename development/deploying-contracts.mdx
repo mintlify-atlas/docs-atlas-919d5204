@@ -1,0 +1,189 @@
+---
+title: "Deploying Contracts"
+description: "Step-by-step guide to deploying the full HideMe contract suite on Ethereum mainnet or Sepolia."
+---
+
+## Overview
+
+HideMe consists of four independently deployable contracts. Each contract has its own `hardhat-deploy` script in `contracts/deploy/` and its own `--tags` flag. You can deploy them individually or as a full suite.
+
+All contracts inherit from Zama's `ZamaEthereumConfig` (via `@fhevm/solidity`), which automatically injects the correct ACL, KMS, InputVerifier, and Gateway contract addresses for the target network at construction time — you do not need to pass these as constructor arguments.
+
+<Info>
+  The contracts are already deployed on mainnet. You only need to follow this guide if you are forking the project, deploying to Sepolia for testing, or redeploying after contract changes.
+</Info>
+
+---
+
+## Prerequisites
+
+Before deploying, make sure you have:
+
+1. Installed dependencies: `cd contracts && npm install`
+2. Compiled the contracts: `npx hardhat compile`
+3. Set your deployer mnemonic and RPC key:
+
+```bash
+npx hardhat vars set MNEMONIC
+npx hardhat vars set INFURA_API_KEY
+```
+
+The first account derived from your mnemonic (`m/44'/60'/0'/0/0`) is used as the deployer. Ensure this account holds enough ETH to cover deployment gas on your target network.
+
+---
+
+## Deployment Sequence
+
+Deploy the contracts in the order below. Some contracts depend on addresses from earlier deployments.
+
+<Steps>
+  <Step title="Deploy HideMeFactory">
+    `HideMeFactory` is the token registry. It deploys new `HideMeToken` instances and stores on-chain metadata for the frontend registry. It has no constructor dependencies.
+
+    ```bash
+    npx hardhat deploy --network mainnet --tags HideMeFactory
+    ```
+
+    The deploy script is `contracts/deploy/deployHideMe.ts`:
+
+    ```typescript
+    const deployedFactory = await deploy("HideMeFactory", {
+      from: deployer,
+      log: true,
+    });
+    ```
+
+    Record the deployed address — you will need it for `NEXT_PUBLIC_FACTORY_ADDRESS_MAINNET` in your frontend `.env.local`.
+  </Step>
+
+  <Step title="Deploy WrapperFactory">
+    `WrapperFactory` manages deployment of `ConfidentialWrapper` instances. Each wrapper converts a standard ERC-20 into a confidential cToken. `WrapperFactory` must be deployed before the router, because the router takes the factory address as a constructor argument.
+
+    ```bash
+    npx hardhat deploy --network mainnet --tags WrapperFactory
+    ```
+
+    The deploy script is `contracts/deploy/deployWrapperFactory.ts`:
+
+    ```typescript
+    const deployed = await deploy("WrapperFactory", {
+      from: deployer,
+      log: true,
+    });
+    ```
+
+    Record the deployed `WrapperFactory` address.
+  </Step>
+
+  <Step title="Deploy ConfidentialPaymentRouterV2">
+    `ConfidentialPaymentRouterV2` is the one-click confidential payment router. It takes the `WrapperFactory` address as a constructor argument so it can look up or deploy wrappers on demand.
+
+    Before deploying, open `contracts/deploy/deployRouterV2.ts` and update `WRAPPER_FACTORY` if you deployed a new `WrapperFactory` in the previous step:
+
+    ```typescript
+    const WRAPPER_FACTORY = "0xde8d3122329916968BA9c5E034Bbade431687408";
+
+    const deployed = await deploy("ConfidentialPaymentRouterV2", {
+      from: deployer,
+      args: [WRAPPER_FACTORY],
+      log: true,
+    });
+    ```
+
+    Then deploy:
+
+    ```bash
+    npx hardhat deploy --network mainnet --tags RouterV2
+    ```
+  </Step>
+
+  <Step title="Deploy ConfidentialPayments">
+    `ConfidentialPayments` handles payment links for native `HideMeToken`s. Merchants create fixed-amount payment links; payers fulfill them via `payLink()`, which triggers an on-chain encrypted transfer. This contract has no constructor dependencies.
+
+    ```bash
+    npx hardhat deploy --network mainnet --tags Payments
+    ```
+
+    The deploy script is `contracts/deploy/deployPayments.ts`:
+
+    ```typescript
+    const deployed = await deploy("ConfidentialPayments", {
+      from: deployer,
+      log: true,
+    });
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Mainnet Contract Addresses
+
+The following contracts are already deployed on Ethereum mainnet and are used by the production frontend.
+
+| Contract | Address |
+|---|---|
+| HideMeFactory | `0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B` |
+| WrapperFactory | `0xde8d3122329916968BA9c5E034Bbade431687408` |
+| PaymentRouterV2 | `0x087D50Bb21a4C7A5E9394E9739809cB3AA6576Fa` |
+| ConfidentialPayments | `0xA12c43CFCe337f0f8b831551Fbd273A61b0488d5` |
+
+---
+
+## Deploying to Sepolia
+
+All four deploy commands accept `--network sepolia` in place of `--network mainnet`. The Hardhat config points Sepolia to `https://sepolia.infura.io/v3/${INFURA_API_KEY}` and uses chain ID `11155111`.
+
+```bash
+npx hardhat deploy --network sepolia --tags HideMeFactory
+npx hardhat deploy --network sepolia --tags WrapperFactory
+npx hardhat deploy --network sepolia --tags RouterV2
+npx hardhat deploy --network sepolia --tags Payments
+```
+
+<Tip>
+  Use the `sepoliaPublic` network (`--network sepoliaPublic`) if you do not have an Infura API key. It routes through `https://sepolia.drpc.org` and requires no API key.
+</Tip>
+
+---
+
+## Post-Deployment: Update the Frontend
+
+After deploying new contract instances, update the frontend to point at your new addresses.
+
+1. Open `frontend/src/lib/constants.ts` and update the hardcoded addresses for `PAYMENTS_ADDRESS`, `WRAPPER_FACTORY_ADDRESS`, and `ROUTER_V2_ADDRESS` if you redeployed those contracts.
+2. Update `.env.local` with the new factory address:
+
+```bash
+# For mainnet
+NEXT_PUBLIC_FACTORY_ADDRESS_MAINNET=0xYourNewFactoryAddress
+
+# For Sepolia
+NEXT_PUBLIC_FACTORY_ADDRESS=0xYourNewSepoliaFactoryAddress
+```
+
+<Info>
+  The `PAYMENTS_ADDRESS`, `WRAPPER_FACTORY_ADDRESS`, and `ROUTER_V2_ADDRESS` constants in `constants.ts` are currently hardcoded to the production mainnet addresses. If you deploy your own instances, update these values directly in the source file.
+</Info>
+
+---
+
+## Zama fhEVM Configuration
+
+Every HideMe contract inherits from Zama's `ZamaEthereumConfig` (provided by `@fhevm/solidity`). This base contract sets the ACL, KMS verifier, InputVerifier, and Gateway contract addresses for the target network automatically at construction time, based on the `block.chainid`.
+
+You do not pass these addresses manually. The configuration in `frontend/src/lib/constants.ts` mirrors these values on the client side for the TFHE SDK initialization:
+
+```typescript
+// Mainnet Zama infrastructure addresses (set automatically in contracts)
+export const ZAMA_CONFIG_MAINNET = {
+  aclContractAddress: "0xcA2E8f1F656CD25C01F05d0b243Ab1ecd4a8ffb6",
+  kmsContractAddress: "0x77627828a55156b04Ac0DC0eb30467f1a552BB03",
+  inputVerifierContractAddress: "0xCe0FC2e05CFff1B719EFF7169f7D80Af770c8EA2",
+  gatewayChainId: 261131,
+  relayerUrl: "https://relayer.mainnet.zama.org",
+  // ...
+};
+```
+
+These addresses are controlled by Zama and should not be changed unless Zama publishes an infrastructure upgrade.

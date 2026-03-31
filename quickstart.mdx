@@ -1,80 +1,117 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quick start"
+description: "Connect your wallet and make your first confidential transfer on Ethereum mainnet in minutes."
 ---
 
-## Get started in three steps
+HideMe runs entirely in the browser on Ethereum mainnet. You need a wallet with ETH for gas — no test network, no faucet, no setup required.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
+  <Step title="Connect your wallet">
+    Open the HideMe app and click **Connect Wallet**. HideMe uses [RainbowKit](https://www.rainbowkit.com/) for wallet connection and supports MetaMask, Coinbase Wallet, WalletConnect, and any injected EVM wallet.
 
-### Step 1: Set up your local environment
+    Make sure your wallet is set to **Ethereum mainnet** (chain ID `1`). You need a small amount of ETH to cover gas for encrypted operations — these transactions are more compute-intensive than standard ERC-20 transfers.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    <Info>
+      HideMe does not require any off-chain account, API key, or sign-up. Your wallet is your identity.
+    </Info>
+  </Step>
 
-### Step 2: Deploy your changes
+  <Step title="Browse the token registry">
+    The home page shows every confidential token deployed through HideMeFactory. Each card displays the token name, symbol, total supply, and creator address.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    The factory contract at `0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B` stores on-chain metadata for every token: name, symbol, initial supply, mintability, burnability, description, logo URI, and website. The frontend queries this using `getTokensPaginated()`.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    Click any token card to open the token detail page, where you can transfer, check your balance, and view the contract on Etherscan.
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Create a token or use an existing one">
+    To create your own confidential token, click **Create Token** from the registry page. You configure the following parameters:
 
-### Step 3: Go live
+    | Parameter | Description |
+    |---|---|
+    | `name` | Full token name (e.g. "My Private Token") |
+    | `symbol` | Ticker symbol (e.g. "MPT") |
+    | `initialSupply` | Tokens minted to you at deploy time (6 decimals) |
+    | `mintable` | Whether the owner can mint additional tokens later |
+    | `burnable` | Whether holders can burn their own tokens |
+    | `maxSupply` | Hard cap on total supply (`0` = unlimited) |
+    | `observers` | Compliance addresses that can decrypt any balance |
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    The factory deploys a new HideMeToken contract and records the metadata on-chain in a single transaction. Your initial supply is minted directly to your address as an FHE ciphertext.
 
-## Next steps
+    <Tip>
+      If you just want to try encrypted transfers, use one of the existing tokens in the registry — you don't need to deploy your own.
+    </Tip>
+  </Step>
 
-Now that you have your docs running, explore these key features:
+  <Step title="Make an encrypted transfer">
+    On the token detail page, enter a recipient address and an amount, then click **Transfer**.
+
+    Before the transaction is submitted, your browser encrypts the amount using the Zama TFHE WASM library loaded from `/sdk/relayer-sdk.js`. The encryption happens entirely client-side:
+
+    ```typescript
+    export async function encryptAmount(
+      contractAddress: string,
+      userAddress: string,
+      amount: bigint,
+    ): Promise<{ handle: `0x${string}`; inputProof: `0x${string}` }>
+    ```
+
+    The function calls `createEncryptedInput(contractAddress, userAddress)`, adds the `uint64` value with `.add64(amount)`, and calls `.encrypt()`. This returns a **handle** (a reference to the ciphertext) and an **inputProof** (a zero-knowledge proof that the encrypted value was formed correctly).
+
+    Both values are passed to `HideMeToken.transfer(to, encryptedAmount, inputProof)`. On-chain, `FHE.fromExternal()` verifies the proof and returns the encrypted `euint64`. The contract then performs the balance check and update entirely on encrypted values — the EVM never sees the plaintext amount.
+
+    <Note>
+      Transfer events always emit `amount = 0`. This is intentional: the event is required for ERC-20 compatibility, but the real amount must not appear in logs.
+    </Note>
+
+    If you are in an environment where the Zama relayer is not directly accessible, set `NEXT_PUBLIC_USE_MINI_RELAYER=true` in your `.env.local`. This routes decryption requests through the app's own `/api/decrypt` route instead of calling `relayer.mainnet.zama.org` directly.
+  </Step>
+
+  <Step title="Check your balance">
+    Click **Decrypt Balance** on the token detail page. Your wallet will prompt you to sign an EIP-712 message — this signature is the proof that you are the account owner and authorizes the Zama KMS network to return your decrypted balance.
+
+    The decrypt flow is handled by `decryptUserBalance()`:
+
+    ```typescript
+    export async function decryptUserBalance(
+      contractAddress: string,
+      ciphertextHandle: string,
+      walletClient: {
+        signTypedData: (args: {
+          domain: Record<string, unknown>;
+          types: Record<string, Array<{ name: string; type: string }>>;
+          primaryType: string;
+          message: Record<string, unknown>;
+        }) => Promise<string>;
+        account: { address: string };
+      },
+    ): Promise<bigint>
+    ```
+
+    The function generates a temporary keypair, creates an EIP-712 request scoped to the contract address and a 10-day validity window, and calls `fhevm.userDecrypt()`. The Zama KMS network verifies your signature, checks the ACL on-chain to confirm you are permitted to decrypt the ciphertext handle, and returns the plaintext value encrypted under your temporary public key. Your browser decrypts it locally with the temporary private key.
+
+    Nothing about your balance is ever sent to a server in plaintext.
+
+    <Tip>
+      To reveal all your encrypted cToken balances at once, go to the **Portfolio** page and click **Decrypt All**. This sends a single `signTypedData` request covering all contracts in one batch.
+    </Tip>
+  </Step>
+</Steps>
+
+## What's next
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="How it works" icon="microchip" href="/how-it-works">
+    Learn about the three-layer architecture: Ethereum L1, Zama KMS network, and Gateway Chain.
+  </Card>
+  <Card title="Private portfolio" icon="wallet" href="/features/private-portfolio">
+    Wrap existing ERC-20s into confidential cTokens and manage all your private balances in one place.
+  </Card>
+  <Card title="Confidential payments" icon="paper-plane" href="/features/confidential-payments">
+    Send ERC-20 payments where the amount is encrypted in transit. The receiver gets plain tokens.
+  </Card>
+  <Card title="Smart contracts" icon="file-code" href="/contracts/overview">
+    Read the contract reference for HideMeToken, HideMeFactory, ConfidentialWrapper, and the payment router.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

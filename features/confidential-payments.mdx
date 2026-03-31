@@ -1,0 +1,210 @@
+---
+title: "Confidential Payments"
+description: "Send any ERC-20 with a hidden on-chain amount. The receiver gets plain tokens."
+---
+
+Confidential Payments let you send any standard ERC-20 token where the transfer amount is invisible on-chain. The `ConfidentialPaymentRouterV2` contract wraps your tokens into a `ConfidentialWrapper`, moves them as an encrypted cToken, then unwraps and delivers plain ERC-20 to the receiver — all in a single flow. The receiver never needs to interact with FHE or hold cTokens.
+
+---
+
+## Payment Flow
+
+```
+Sender: approve + send(token, receiver, amount, memo) + 0.00005 ETH fee
+  → Router pulls ERC-20 from sender via safeTransferFrom
+  → Router wraps tokens into cToken (amount is now encrypted on-chain)
+  → Router transfers cToken internally
+  → Router calls unwrap() — triggers KMS decryption request
+  → Payment record created on-chain
+
+Relayer: finalize(paymentId, handlesList, cleartexts, decryptionProof)
+  → KMS proof submitted to wrapper's finalizeUnwrap()
+  → Plain ERC-20 forwarded directly to receiver
+  → Relayer receives the ETH fee as gas reimbursement
+```
+
+<Info>
+  The `finalize()` function is **permissionless** — anyone can submit the KMS proof on behalf of a payment. The HideMe relayer does this automatically, but you or any third party can call it if needed.
+</Info>
+
+---
+
+## send()
+
+```solidity
+function send(
+    address token,
+    address receiver,
+    uint256 amount,
+    string calldata memo
+) external payable returns (uint256 paymentId);
+```
+
+<ParamField body="token" type="address" required>
+  The ERC-20 token address you want to send. A `ConfidentialWrapper` must already exist for this token in `WrapperFactory`. Call `getWrapper(token)` on the factory first to verify it returns a non-zero address.
+</ParamField>
+
+<ParamField body="receiver" type="address" required>
+  The wallet address that will receive the plain ERC-20 after finalization.
+</ParamField>
+
+<ParamField body="amount" type="uint256" required>
+  Amount in the token's native decimals (e.g. `1_000_000` for 1 USDC, `1e18` for 1 WETH).
+</ParamField>
+
+<ParamField body="memo" type="string">
+  A human-readable note stored on-chain with the payment record.
+</ParamField>
+
+You must also send at least `0.00005 ETH` (`MIN_RELAYER_FEE`) as `msg.value`. This covers the relayer's gas cost for the finalization transaction.
+
+**Before calling `send()`, approve the router:**
+
+```solidity
+IERC20(token).approve(routerAddress, amount);
+```
+
+**Estimated gas:** ~1,500,000 for the full `send()` call.
+
+---
+
+## finalize()
+
+```solidity
+function finalize(
+    uint256 paymentId,
+    bytes32[] calldata handlesList,
+    bytes calldata cleartexts,
+    bytes calldata decryptionProof
+) external;
+```
+
+Submits the Zama KMS threshold decryption proof for the payment's unwrap request. Once verified:
+
+1. The wrapper's `finalizeUnwrap()` is called, burning the cToken and releasing the underlying ERC-20.
+2. The underlying ERC-20 is forwarded to `receiver`.
+3. The `relayerFee` ETH is sent to the caller (the relayer).
+
+<ParamField body="paymentId" type="uint256" required>
+  The ID returned by `send()` and emitted in the `PaymentCreated` event.
+</ParamField>
+
+<ParamField body="handlesList" type="bytes32[]" required>
+  The FHE ciphertext handles being decrypted — from the `PaymentUnwrapRequested` event.
+</ParamField>
+
+<ParamField body="cleartexts" type="bytes" required>
+  ABI-encoded decrypted values from the KMS network.
+</ParamField>
+
+<ParamField body="decryptionProof" type="bytes" required>
+  KMS threshold signatures authorising the decryption.
+</ParamField>
+
+---
+
+## cancel()
+
+```solidity
+function cancel(uint256 paymentId) external;
+```
+
+If a payment's KMS proof has not been submitted after **1 day**, the original sender can cancel and recover their tokens. Cancellation:
+
+- Calls `cancelUnwrap()` on the wrapper to clear the restriction.
+- Returns the cToken balance to the sender via `transferPlaintext`.
+- Refunds the `relayerFee` ETH to the sender.
+
+<Warning>
+  Only the original `sender` can cancel a payment, and only after `PAYMENT_TIMEOUT = 1 days` has passed since `send()` was called.
+</Warning>
+
+---
+
+## Payment struct fields
+
+<ResponseField name="sender" type="address">
+  Wallet that initiated the payment.
+</ResponseField>
+
+<ResponseField name="receiver" type="address">
+  Wallet that will receive the plain ERC-20.
+</ResponseField>
+
+<ResponseField name="wrapper" type="address">
+  Address of the `ConfidentialWrapper` used for this token.
+</ResponseField>
+
+<ResponseField name="amount" type="uint64">
+  Amount in 6-decimal cToken units (after decimal adjustment from the underlying token).
+</ResponseField>
+
+<ResponseField name="unwrapRequestId" type="uint256">
+  The request ID passed to the wrapper's `unwrap()` function. Used in `finalize()`.
+</ResponseField>
+
+<ResponseField name="handle" type="bytes32">
+  The FHE ciphertext handle for the `canUnwrap` encrypted boolean submitted to the KMS.
+</ResponseField>
+
+<ResponseField name="relayerFee" type="uint256">
+  ETH locked for the relayer, paid out on successful finalization.
+</ResponseField>
+
+<ResponseField name="memo" type="string">
+  Human-readable note attached to the payment.
+</ResponseField>
+
+<ResponseField name="createdAt" type="uint256">
+  Unix timestamp when `send()` was called.
+</ResponseField>
+
+<ResponseField name="finalized" type="bool">
+  `true` after `finalize()` has been called successfully.
+</ResponseField>
+
+<ResponseField name="cancelled" type="bool">
+  `true` if the sender cancelled after the timeout.
+</ResponseField>
+
+---
+
+## Batch Payments
+
+You can send multiple payments in a single session. However, they must be processed **sequentially** — you must wait for each payment to be finalized before sending the next one using the same token.
+
+This is because the `ConfidentialWrapper` restricts the router's account (`isRestricted = true`) during a pending unwrap. The restriction is cleared only after `finalizeUnwrap()` completes.
+
+```
+Send payment #0 → wait for finalize #0 → send payment #1 → wait for finalize #1 → ...
+```
+
+<Info>
+  Payments for different tokens can be sent in parallel because each token has its own `ConfidentialWrapper` contract with independent restriction state.
+</Info>
+
+---
+
+## Prerequisites
+
+<Warning>
+  Before calling `send()`, verify that a `ConfidentialWrapper` exists for the token:
+
+  ```solidity
+  address wrapper = IWrapperFactory(WRAPPER_FACTORY_ADDRESS).getWrapper(token);
+  require(wrapper != address(0), "No wrapper for this token");
+  ```
+
+  If no wrapper exists, `send()` will revert with `WrapperNotFound()`. You can deploy a new wrapper through `WrapperFactory.createWrapper(token)`.
+</Warning>
+
+---
+
+## Contract Addresses
+
+| Contract | Network | Address |
+|----------|---------|---------|
+| PaymentRouterV2 | Ethereum Mainnet | `0x087D50Bb21a4C7A5E9394E9739809cB3AA6576Fa` |
+| WrapperFactory | Ethereum Mainnet | `0xde8d3122329916968BA9c5E034Bbade431687408` |
+| cWETH Wrapper | Ethereum Mainnet | `0x7a339078f9abde76c7cf9360238eafd2a64c0ee7` |
+| cUSDC Wrapper | Ethereum Mainnet | `0x1704cd8697f1c4f21bab3e0c4cf149cb7b1e5147` |

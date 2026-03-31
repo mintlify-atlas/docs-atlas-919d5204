@@ -1,0 +1,84 @@
+---
+title: 'Smart contracts overview'
+description: 'Six Solidity contracts powering confidential ERC-20 tokens and payments on Ethereum mainnet using Zama fhEVM.'
+keywords: ['fhevm', 'fhe', 'zama', 'confidential', 'erc-20', 'solidity', 'ethereum']
+---
+
+HideMe is built on six Solidity contracts deployed on Ethereum mainnet. Every contract inherits `ZamaEthereumConfig`, which wires in the Zama fhEVM library addresses (ACL, KMS, InputVerifier, and Gateway) required for on-chain Fully Homomorphic Encryption.
+
+All contracts are written in Solidity `0.8.27`, licensed MIT, and deployed without proxy patterns — there are no admin keys or upgrade mechanisms.
+
+<CardGroup cols={2}>
+  <Card title="HideMeToken" icon="coins" href="/contracts/hideme-token">
+    Confidential ERC-20 with FHE-encrypted balances
+  </Card>
+  <Card title="HideMeFactory" icon="industry" href="/contracts/hideme-factory">
+    Deploy and discover confidential tokens
+  </Card>
+  <Card title="ConfidentialWrapper" icon="box" href="/contracts/confidential-wrapper">
+    Wrap any ERC-20 into a confidential cToken
+  </Card>
+  <Card title="WrapperFactory" icon="warehouse" href="/contracts/wrapper-factory">
+    Deploy and discover ERC-20 wrappers
+  </Card>
+  <Card title="ConfidentialPaymentRouterV2" icon="route" href="/contracts/payment-router-v2">
+    Send any ERC-20 with encrypted amounts
+  </Card>
+  <Card title="ConfidentialPayments" icon="link" href="/contracts/confidential-payments">
+    Payment links for HideMeToken
+  </Card>
+</CardGroup>
+
+## Contract interaction patterns
+
+The six contracts form two parallel paths — one for native confidential tokens, one for wrapping existing ERC-20s — plus a shared payment layer on top of each.
+
+### Native confidential tokens
+
+`HideMeFactory.createToken()` deploys a fresh `HideMeToken` instance. The factory records metadata (name, symbol, description, logo URI, website) and indexes the address for paginated discovery. The deployed token is immediately usable: the caller becomes owner, receives the initial supply, and can configure observers and mint/burn settings at creation time.
+
+### Wrapping existing ERC-20s
+
+`WrapperFactory.createWrapper(erc20)` deploys a `ConfidentialWrapper` bound to a specific ERC-20. The factory enforces one wrapper per underlying token — calling `createWrapper` again for the same address reverts. Once deployed, users `approve` the wrapper and call `wrap(amount)` to lock ERC-20 tokens and receive an encrypted `euint64` cToken balance.
+
+Unwrapping is a two-step async process:
+
+1. **Request** — `unwrap(amount)` computes an encrypted boolean (`canUnwrap = FHE.le(amount, balance)`) and calls `FHE.makePubliclyDecryptable()` to submit a decryption request to the Zama KMS network. The account is marked restricted until the request settles.
+2. **Finalize** — a relayer calls `finalizeUnwrap(requestId, handlesList, cleartexts, decryptionProof)`. The contract verifies the KMS threshold signatures via `FHE.checkSignatures()`. If `canUnwrap == true`, the cToken balance is burned and the original ERC-20 is returned.
+
+### Confidential payments via RouterV2
+
+`ConfidentialPaymentRouterV2` integrates directly with `WrapperFactory` to find or create a wrapper for any ERC-20. A sender calls `send(token, receiver, amount, memo)` with a small ETH relayer fee (minimum 0.00005 ETH). The router:
+
+1. Pulls the ERC-20 from the sender.
+2. Wraps it into the cToken (amount is encrypted on-chain).
+3. Immediately requests an unwrap for the receiver's address.
+
+A relayer calls `finalize(paymentId, ...)` with the KMS proof. The plain ERC-20 lands in the receiver's wallet without the receiver ever interacting with FHE or cTokens. The relayer collects the ETH fee as a gas reimbursement.
+
+### Payment links via ConfidentialPayments
+
+`ConfidentialPayments` works directly with `HideMeToken` rather than going through the wrapper path. Merchants call `createPaymentLink(token, amount, memo, expiry)` to record a fixed-amount payment request on-chain. Payers call `payLink(linkId)`, which triggers `HideMeToken.transferPlaintext()` — the amount is encrypted inside the EVM by `FHE.asEuint64()`, so the on-chain transfer is confidential even though the payment link amount is publicly visible.
+
+## Zama fhEVM integration
+
+All six contracts inherit `ZamaEthereumConfig` from the `@fhevm/solidity` library. This base contract sets the hard-coded Ethereum mainnet addresses for:
+
+- **ACL contract** — governs which addresses may decrypt a given ciphertext handle.
+- **KMS contract** — the on-chain anchor for the Zama threshold key-management network.
+- **InputVerifier** — validates client-side FHE proofs submitted with encrypted inputs.
+- **Gateway** — coordinates public decryption requests between Ethereum L1 and the Gateway chain.
+
+<Note>
+  Because these addresses are set at compile time via `ZamaEthereumConfig`, the contracts are network-specific. Deploying to a testnet requires a different config base contract (`ZamaSepoliaConfig` or similar).
+</Note>
+
+## Encryption model
+
+Balances and transfer amounts are stored and manipulated as `euint64` ciphertexts — encrypted 64-bit unsigned integers. All arithmetic (`FHE.add`, `FHE.sub`) and comparisons (`FHE.le`) operate directly on ciphertexts without decryption. Insufficient-balance transfers silently send zero tokens rather than reverting; this prevents an attacker from probing balances through revert patterns.
+
+All tokens (both `HideMeToken` and `ConfidentialWrapper`) use **6 decimal places**. Wrappers with higher-decimal underlyings (e.g. WETH at 18 decimals) scale amounts down on wrap and back up on unwrap.
+
+<Tip>
+  Transfer events always emit `amount = 0`. On-chain observers cannot determine transfer amounts from logs. Balance queries return an opaque `euint64` handle — only the account owner (and designated observer addresses) can request decryption via the Zama KMS.
+</Tip>

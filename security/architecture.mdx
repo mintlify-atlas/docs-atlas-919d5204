@@ -1,0 +1,175 @@
+---
+title: "Architecture"
+description: "How HideMe's frontend, smart contracts, Zama KMS, and Gateway Chain fit together to deliver confidential token transfers on Ethereum."
+keywords: ["architecture", "fhEVM", "Next.js", "Wagmi", "KMS", "Gateway Chain", "smart contracts", "TFHE WASM"]
+---
+
+HideMe operates across three independent layers: a Next.js frontend that runs TFHE WASM in the browser, a set of six immutable Ethereum mainnet contracts that store and compute on FHE ciphertexts, and the Zama infrastructure (KMS + Gateway Chain) that manages keys and decryption proofs.
+
+## System diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        FRONTEND (Next.js 16)                     │
+│                                                                   │
+│   Registry    Portfolio    Payments    Token Detail    Create      │
+│      │           │            │            │             │         │
+│      └───────────┴────────────┴────────────┴─────────────┘        │
+│                           │                                       │
+│                     Wagmi / Viem                                   │
+│                           │                                       │
+│              ┌────────────┴────────────┐                          │
+│              │   Zama Relayer SDK      │                          │
+│              │   (TFHE WASM + KMS)     │                          │
+│              └────────────┬────────────┘                          │
+└───────────────────────────┼───────────────────────────────────────┘
+                            │
+          ┌─────────────────┼─────────────────┐
+          │                 │                 │
+          ▼                 ▼                 ▼
+┌─────────────────┐ ┌─────────────┐ ┌─────────────────────┐
+│  Ethereum L1    │ │  Zama KMS   │ │  Gateway Chain      │
+│                 │ │  Network    │ │  (Decryption Proof)  │
+│  HideMeFactory  │ │             │ │                     │
+│  HideMeToken    │ │  Encrypts   │ │  Public Decrypt     │
+│  WrapperFactory │ │  Decrypts   │ │  User Decrypt       │
+│  Wrappers       │ │  Computes   │ │  Threshold Sigs     │
+│  RouterV2       │ │             │ │                     │
+│  Payments       │ │             │ │                     │
+└─────────────────┘ └─────────────┘ └─────────────────────┘
+```
+
+---
+
+## Layer 1: frontend
+
+The frontend is a **Next.js 16** application using React 19 with server components, API routes, and Turbopack for fast local development.
+
+### Pages
+
+| Route | Purpose |
+|---|---|
+| `/` | Token registry — browse all confidential tokens created through the factory |
+| `/create` | Multi-step token creation wizard |
+| `/token/[address]` | Token detail page with encrypted transfer, mint, burn, and observer controls |
+| `/portfolio` | Private portfolio — wrap/unwrap ERC-20s, decrypt all balances in one signature |
+| `/payments` | Send any ERC-20 confidentially; batch payment support |
+| `/pay/[txHash]` | Payer UI for fulfilling a payment link — resolves `linkId` from the creation transaction hash |
+
+### Wallet and contract interaction
+
+Wagmi 2 manages all contract reads and writes. RainbowKit 2 handles wallet connection UI. Contract ABIs are stored as JSON files under `frontend/src/lib/abi/`.
+
+### TFHE WASM (client-side encryption)
+
+The Zama Relayer SDK ships two WASM bundles served as static assets:
+
+- `public/sdk/tfhe_bg.wasm` — TFHE cryptographic operations
+- `public/sdk/kms_lib_bg.wasm` — KMS client library
+
+The SDK initializes lazily on first use. Once loaded, `encryptAmount()` encrypts a `uint64` value client-side and returns an `externalEuint64` handle and an `inputProof` that the contract verifies via `FHE.fromExternal()`:
+
+```typescript
+export async function encryptAmount(
+  contractAddress: string,
+  userAddress: string,
+  amount: bigint,
+): Promise<{ handle: `0x${string}`; inputProof: `0x${string}` }> {
+  const fhevm = await getFhevmInstance();
+  const input = fhevm.createEncryptedInput(contractAddress, userAddress);
+  input.add64(amount);
+  const encrypted = await input.encrypt();
+  // ...
+}
+```
+
+### API routes
+
+The Next.js app exposes three internal API routes used for KMS-related operations:
+
+| Route | Purpose |
+|---|---|
+| `/api/decrypt/user-decrypt` | Mini-relayer for user balance decryption. Proxies EIP-712 signed requests to the Zama KMS gateway. The decrypted value is returned encrypted under your ephemeral public key — the server never sees plaintext. |
+| `/api/decrypt/public-decrypt` | Handles public decryption requests (used for unwrap/payment flows). |
+| `/api/decrypt/input-proof` | Proxies input-proof verification requests from the TFHE SDK. |
+| `/api/decrypt/keyurl` | Returns the Zama KMS key URL for the SDK initialization. |
+| `/api/relayer/request-decrypt` | Submits a public decryption request to the Gateway Chain for unwrap/payment finalization. |
+| `/api/relayer/poll-decrypt` | Polls the Gateway Chain for a completed decryption response. |
+| `/api/relayer/submit-finalize` | Submits the finalization transaction (`finalizeUnwrap` or `finalize`) once the KMS proof is ready. |
+
+---
+
+## Layer 2: Ethereum mainnet
+
+Six immutable contracts deployed on Ethereum mainnet store and process encrypted state.
+
+### Contract interaction graph
+
+```
+HideMeFactory
+  └── deploys ──► HideMeToken (one per token)
+
+WrapperFactory
+  └── deploys ──► ConfidentialWrapper (one per ERC-20)
+
+ConfidentialPaymentRouterV2
+  ├── reads ────► WrapperFactory (to locate wrappers)
+  └── calls ────► ConfidentialWrapper (wrap → transfer → unwrap)
+
+ConfidentialPayments
+  └── calls ────► HideMeToken (transferPlaintext for payment links)
+```
+
+### Contract responsibilities
+
+<Steps>
+  <Step title="HideMeFactory">
+    The factory deploys `HideMeToken` instances and stores on-chain metadata (name, symbol, supply, description, logo URI, website). It provides paginated querying so the frontend registry can enumerate all tokens.
+  </Step>
+  <Step title="HideMeToken">
+    The core confidential ERC-20. Balances are `euint64` ciphertexts. All arithmetic — add, subtract, compare — executes on encrypted data. Three transfer modes are supported: client-side encrypted input (`transfer` with `externalEuint64`), existing ciphertext (`transfer` with `euint64`), and on-chain encryption (`transferPlaintext`).
+  </Step>
+  <Step title="WrapperFactory">
+    Deploys one `ConfidentialWrapper` per ERC-20 address, enforcing uniqueness. Provides lookup so the payment router can resolve a token address to its wrapper.
+  </Step>
+  <Step title="ConfidentialWrapper">
+    Converts any standard ERC-20 into a confidential cToken. Wrapping transfers the ERC-20 into the contract and mints an encrypted balance. Unwrapping is a 2-step async operation: the contract marks a boolean ciphertext for public decryption, the KMS provides threshold signatures, and `finalizeUnwrap()` verifies the proof before releasing funds.
+  </Step>
+  <Step title="ConfidentialPaymentRouterV2">
+    Orchestrates one-click confidential payments. The sender's amount is encrypted on-chain during wrapping; the receiver gets plain ERC-20 without ever interacting with FHE. Requires a minimum 0.00005 ETH relayer fee to cover finalization gas.
+  </Step>
+  <Step title="ConfidentialPayments">
+    Payment links for `HideMeToken` holders. Merchants create fixed-amount links; payers call `payLink()`, which triggers `transferPlaintext` for on-chain encryption.
+  </Step>
+</Steps>
+
+---
+
+## Layer 3: Zama infrastructure
+
+### KMS network
+
+The Zama KMS is a threshold key management network. It holds the FHE master key, distributed across independent nodes. Decryption of any ciphertext requires a quorum of nodes to independently sign the decryption result — no single node can act alone.
+
+The KMS handles two decryption paths:
+
+- **User decrypt** — initiated by your wallet's EIP-712 signature. Used when you read your own balance. The result is returned encrypted under your temporary public key.
+- **Public decrypt** — initiated on-chain when a contract calls `FHE.makePubliclyDecryptable()`. Used for unwrap and payment finalization. The KMS returns threshold signatures that are verified by `FHE.checkSignatures()` before any funds move.
+
+### Gateway Chain
+
+The Gateway Chain acts as a coordination layer between Ethereum mainnet and the KMS. When `FHE.makePubliclyDecryptable(handle)` is called on mainnet, the Gateway Chain picks up the event, requests decryption from the KMS nodes, collects their threshold signatures, and relays the signed proof back to mainnet for on-chain verification.
+
+---
+
+<CardGroup cols={3}>
+  <Card title="Contract reference" icon="file-code" href="/contracts/overview">
+    Deployed addresses, ABI details, and per-contract function reference.
+  </Card>
+  <Card title="Privacy model" icon="lock" href="/security/privacy-model">
+    How FHE ciphertexts, silent failures, and the observer model protect your balances.
+  </Card>
+  <Card title="Trust assumptions" icon="shield-check" href="/security/trust-assumptions">
+    What you trust when using HideMe, and the design decisions that bound that trust.
+  </Card>
+</CardGroup>

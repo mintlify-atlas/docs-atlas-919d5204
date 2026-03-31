@@ -1,0 +1,181 @@
+---
+title: "Token Registry"
+description: "Browse, create, and discover confidential ERC-20 tokens deployed through HideMeFactory."
+---
+
+The Token Registry is the home page of HideMe. It displays every confidential token that has been deployed through the `HideMeFactory` contract, giving you a live, on-chain catalogue of tokens with encrypted balances powered by Zama FHE.
+
+Any connected wallet can deploy a new token through the registry's creation wizard. Once created, a `HideMeToken` instance is permanently tracked in the factory and immediately visible to everyone.
+
+<Info>
+  All tokens deployed through HideMeFactory have **6 decimals** (`TOKEN_DECIMALS = 6`), regardless of the token's name or symbol.
+</Info>
+
+---
+
+## Creating a Token
+
+Call `createToken()` on the factory contract with a `CreateParams` struct:
+
+```solidity
+function createToken(CreateParams calldata p) external returns (address tokenAddr);
+```
+
+### CreateParams fields
+
+<ParamField body="name" type="string" required>
+  Human-readable token name (e.g. `"HideMe USD"`).
+</ParamField>
+
+<ParamField body="symbol" type="string" required>
+  Token ticker symbol (e.g. `"hmUSD"`).
+</ParamField>
+
+<ParamField body="initialSupply" type="uint64" required>
+  Amount of tokens minted to the creator on deployment. Uses 6-decimal base units — pass `1000000` to mint 1 token.
+</ParamField>
+
+<ParamField body="mintable" type="bool" required>
+  When `true`, the owner can call `mint()` to create additional tokens after deployment.
+</ParamField>
+
+<ParamField body="burnable" type="bool" required>
+  When `true`, any holder can call `burn()` to permanently destroy tokens from their own balance.
+</ParamField>
+
+<ParamField body="maxSupply" type="uint64" required>
+  Hard cap on total supply. Set to `0` for unlimited. If non-zero, `initialSupply` must not exceed it and future mints will revert if they would cross it.
+</ParamField>
+
+<ParamField body="observers" type="address[]" required>
+  A list of compliance or audit addresses that can decrypt **any** holder's balance. Observers are granted FHE access to every ciphertext updated by the token. Pass an empty array if you do not need compliance access.
+</ParamField>
+
+<ParamField body="logoUri" type="string">
+  URL to the token's logo image. Displayed in the registry card.
+</ParamField>
+
+<ParamField body="website" type="string">
+  Project website URL.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Short description of the token shown in the registry.
+</ParamField>
+
+---
+
+## Querying the Registry
+
+### Paginated token list
+
+The registry frontend uses `getTokensPaginated()` to load tokens in pages, avoiding gas limits from returning huge arrays:
+
+```solidity
+function getTokensPaginated(
+    uint256 offset,
+    uint256 limit
+) external view returns (TokenInfo[] memory);
+```
+
+- `offset` — index of the first token to return (0-based)
+- `limit` — maximum number of tokens to return per call
+- Returns an empty array when `offset >= totalTokens()`
+
+**Example**: to load the first 20 tokens, call `getTokensPaginated(0, 20)`. For the next page, call `getTokensPaginated(20, 20)`.
+
+### TokenInfo struct
+
+Each element returned by `getTokensPaginated()` is a `TokenInfo` struct:
+
+<ResponseField name="tokenAddress" type="address">
+  On-chain address of the deployed `HideMeToken` contract.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Token name set at creation.
+</ResponseField>
+
+<ResponseField name="symbol" type="string">
+  Token ticker symbol.
+</ResponseField>
+
+<ResponseField name="initialSupply" type="uint64">
+  Supply minted to the creator at deployment (6 decimals).
+</ResponseField>
+
+<ResponseField name="creator" type="address">
+  Wallet address that called `createToken()`.
+</ResponseField>
+
+<ResponseField name="createdAt" type="uint256">
+  Unix timestamp of the block in which the token was deployed.
+</ResponseField>
+
+<ResponseField name="mintable" type="bool">
+  Whether the owner can mint additional tokens.
+</ResponseField>
+
+<ResponseField name="burnable" type="bool">
+  Whether holders can burn their own tokens.
+</ResponseField>
+
+<ResponseField name="maxSupply" type="uint64">
+  Hard supply cap. `0` means unlimited.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Token description stored in the factory.
+</ResponseField>
+
+<ResponseField name="logoUri" type="string">
+  Logo image URL.
+</ResponseField>
+
+<ResponseField name="website" type="string">
+  Project website URL.
+</ResponseField>
+
+---
+
+## Additional Query Functions
+
+```solidity
+// Total number of tokens ever created
+function totalTokens() external view returns (uint256);
+
+// All token addresses in a single call
+function getAllTokens() external view returns (address[] memory);
+
+// Tokens created by a specific wallet
+function getTokensByCreator(address creator) external view returns (address[] memory);
+```
+
+---
+
+## Contract Address
+
+| Network | Address |
+|---------|---------|
+| Ethereum Mainnet | `0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B` |
+
+---
+
+## Token Governance
+
+Once a token is deployed, the creator becomes the `owner` and has the following capabilities:
+
+<CardGroup cols={2}>
+  <Card title="Mint" icon="plus">
+    Call `mint(to, amount)` to issue new tokens — only available when `mintable = true` and the new supply would not exceed `maxSupply`.
+  </Card>
+  <Card title="Add Observers" icon="eye">
+    Call `addObserver(address)` to grant a compliance address decrypt access to all current and future balances.
+  </Card>
+  <Card title="Remove Observers" icon="eye-slash">
+    Call `removeObserver(address)` to revoke an observer's decrypt access.
+  </Card>
+  <Card title="Transfer / Renounce Ownership" icon="key">
+    Call `transferOwnership(newOwner)` or `renounceOwnership()` to permanently give up minting and observer management rights.
+  </Card>
+</CardGroup>

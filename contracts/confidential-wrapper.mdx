@@ -1,0 +1,153 @@
+---
+title: "ConfidentialWrapper"
+description: "Wraps any standard ERC-20 into a confidential cToken with FHE-encrypted balances. Unwrapping is a 2-step async process requiring KMS threshold decryption."
+---
+
+`ConfidentialWrapper` locks a standard ERC-20 and issues confidential wrapped tokens (`cTokens`) with encrypted balances. The wrapper handles decimal normalization — all cTokens use 6 decimals regardless of the underlying token's decimals.
+
+Deployed instances on mainnet:
+- **cWETH:** [`0x7a339078f9abde76c7cf9360238eafd2a64c0ee7`](https://etherscan.io/address/0x7a339078f9abde76c7cf9360238eafd2a64c0ee7)
+- **cUSDC:** [`0x1704cd8697f1c4f21bab3e0c4cf149cb7b1e5147`](https://etherscan.io/address/0x1704cd8697f1c4f21bab3e0c4cf149cb7b1e5147)
+
+New wrappers are created via [WrapperFactory](/contracts/wrapper-factory).
+
+## Key properties
+
+| Property | Value |
+|----------|-------|
+| cToken decimals | 6 (always) |
+| Unwrap timeout | 1 day (`UNWRAP_TIMEOUT`) |
+| Underlying token | Immutable, set at deploy |
+
+## wrap
+
+```solidity
+function wrap(uint256 amount) external
+```
+
+Deposit ERC-20 tokens and receive an equivalent encrypted cToken balance. You must `approve` the wrapper contract before calling this.
+
+<ParamField path="amount" type="uint256" required>
+  Amount in the underlying token's native decimals (e.g. `1e18` for 1 WETH).
+</ParamField>
+
+The contract adjusts decimals automatically: a `1e18` WETH deposit becomes `1_000_000` encrypted cWETH units (6 decimals).
+
+<Warning>
+Your account is blocked from wrapping if `isRestricted[msg.sender]` is `true` — i.e. you have a pending unwrap request. Wait for the unwrap to finalize or cancel it first.
+</Warning>
+
+## unwrap
+
+```solidity
+function unwrap(uint64 amount) external returns (uint256 requestId)
+```
+
+Request to convert encrypted cTokens back to plain ERC-20. This is **step 1** of a 2-step async process.
+
+<ParamField path="amount" type="uint64" required>
+  Amount of cTokens to unwrap (6 decimals). For example, `1_000_000` = 1 token.
+</ParamField>
+
+Returns a `requestId` you use in `finalizeUnwrap`. The contract marks your account as restricted (`isRestricted = true`) until finalized or cancelled.
+
+Internally, `FHE.le(amount, balance)` creates an encrypted boolean (`canUnwrap`) and calls `FHE.makePubliclyDecryptable(canUnwrap)` to request KMS threshold decryption.
+
+## finalizeUnwrap
+
+```solidity
+function finalizeUnwrap(
+    uint256 requestId,
+    bytes32[] calldata handlesList,
+    bytes calldata cleartexts,
+    bytes calldata decryptionProof
+) external
+```
+
+**Step 2** — anyone can call this once the KMS has signed the decryption proof. Typically called by the relayer.
+
+<ParamField path="requestId" type="uint256" required>
+  The request ID returned by `unwrap()`.
+</ParamField>
+<ParamField path="handlesList" type="bytes32[]" required>
+  The FHE ciphertext handles that were decrypted (must match the `canUnwrap` handle).
+</ParamField>
+<ParamField path="cleartexts" type="bytes" required>
+  ABI-encoded decrypted values. Decoded as `bool canUnwrap`.
+</ParamField>
+<ParamField path="decryptionProof" type="bytes" required>
+  KMS threshold signatures verified via `FHE.checkSignatures()`.
+</ParamField>
+
+If `canUnwrap == true`, the cToken balance is reduced and the underlying ERC-20 is transferred to the requester. The account restriction is cleared regardless of outcome.
+
+## cancelUnwrap
+
+```solidity
+function cancelUnwrap(uint256 requestId) external
+```
+
+Cancel a stuck unwrap request. Only callable by the request owner, and only after `UNWRAP_TIMEOUT` (1 day) has elapsed. Clears the account restriction without transferring any underlying tokens.
+
+## transferPlaintext
+
+```solidity
+function transferPlaintext(address to, uint64 amount) external returns (bool)
+```
+
+Transfer cTokens by providing a plaintext amount that is encrypted on-chain via `FHE.asEuint64`. Used by `ConfidentialPaymentRouterV2` internally.
+
+## balanceOf
+
+```solidity
+function balanceOf(address account) external view returns (euint64)
+```
+
+Returns the encrypted cToken balance handle. Use the Zama decryption flow to read the actual value.
+
+## UnwrapRequest struct
+
+<ResponseField name="account" type="address">
+  Address that requested the unwrap.
+</ResponseField>
+<ResponseField name="amount" type="uint64">
+  Amount requested to unwrap (6 decimals).
+</ResponseField>
+<ResponseField name="handle" type="bytes32">
+  The `ebool` ciphertext handle for the `canUnwrap` boolean.
+</ResponseField>
+<ResponseField name="createdAt" type="uint256">
+  Block timestamp when the unwrap was requested. Used to enforce the 1-day timeout.
+</ResponseField>
+
+## Events
+
+| Event | Parameters | Notes |
+|-------|-----------|-------|
+| `Wrapped` | `account, amount` | cToken amount (6 decimals) |
+| `UnwrapRequested` | `requestId, account, amount, handle` | |
+| `UnwrapFinalized` | `requestId, account, amount, success` | |
+| `UnwrapCancelled` | `requestId, account` | |
+| `Transfer` | `from, to, amount` | `amount` always `0` |
+
+## Custom errors
+
+| Error | When thrown |
+|-------|------------|
+| `ZeroAddress` | Zero address passed |
+| `ZeroAmount` | `amount` is `0` |
+| `AmountTooHigh` | Adjusted amount exceeds `uint64` max |
+| `AccountRestricted` | Caller has a pending unwrap request |
+| `RequestNotFound` | `requestId` does not exist |
+| `RequestNotReady` | Timeout not yet elapsed (for `cancelUnwrap`) |
+| `NotRequestOwner` | Caller is not the request owner |
+| `RequestExpired` | (reserved) |
+
+<CardGroup cols={2}>
+  <Card title="WrapperFactory" icon="industry" href="/contracts/wrapper-factory">
+    How to deploy a new wrapper for any ERC-20.
+  </Card>
+  <Card title="Private Portfolio" icon="wallet" href="/features/private-portfolio">
+    Using wrap/unwrap from the frontend.
+  </Card>
+</CardGroup>

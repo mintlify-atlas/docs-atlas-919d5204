@@ -1,0 +1,142 @@
+---
+title: "Privacy model"
+description: "How HideMe keeps your balances and transfer amounts invisible on-chain using Fully Homomorphic Encryption."
+keywords: ["FHE", "privacy", "encrypted balances", "euint64", "observer", "EIP-712", "Zama KMS"]
+---
+
+HideMe stores token balances and transfer amounts as FHE ciphertexts directly on Ethereum L1. No one — not miners, node operators, block explorers, or the HideMe team — can read your balance without your wallet's private key.
+
+## Encrypted balances
+
+Every account's balance is stored as a `euint64` — an encrypted 64-bit unsigned integer — rather than a plaintext `uint256`. The ciphertext lives in the `_balances` mapping on the `HideMeToken` contract.
+
+```solidity
+mapping(address => euint64) internal _balances;
+```
+
+Because the EVM only ever sees an opaque ciphertext handle, no on-chain observer can learn your balance by reading contract storage. Decryption can only happen off-chain, through the Zama KMS, and only with a valid EIP-712 signature from your wallet.
+
+## Transfer amount privacy
+
+When you call `transfer()`, the amount you pass is encrypted client-side using the TFHE WASM library running in your browser before the transaction is broadcast. The `FHE.fromExternal()` call inside the contract verifies the encryption proof and produces an `euint64` that never appears in plaintext anywhere on-chain.
+
+```solidity
+function transfer(
+    address to,
+    externalEuint64 encryptedAmount,
+    bytes calldata inputProof
+) external returns (bool) {
+    euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+    _transfer(msg.sender, to, amount);
+    return true;
+}
+```
+
+The `Transfer` event always emits `amount = 0`:
+
+```solidity
+/// @dev Amount is always 0 in events to prevent leaking encrypted data
+event Transfer(address indexed from, address indexed to, uint256 amount);
+```
+
+This means block explorers show only the sender and receiver addresses. The transferred amount is never recorded in event logs.
+
+## Encrypted arithmetic
+
+Checking whether you have sufficient balance is itself a private operation. HideMe uses `FHE.le()` to compare two ciphertexts without revealing either value, and `FHE.select()` to choose the actual transfer value without branching in plaintext:
+
+```solidity
+ebool canTransfer = FHE.le(amount, _balances[from]);
+euint64 transferValue = FHE.select(canTransfer, amount, FHE.asEuint64(0));
+```
+
+If your balance is too low, `transferValue` silently becomes `0` — the transaction still succeeds, but nothing is moved. This is intentional: a revert would let an observer probe your balance by repeatedly adjusting amounts until they find the boundary. Silent failure removes that attack surface entirely.
+
+The same pattern applies to burns and `transferFrom` operations.
+
+## Decrypting your balance
+
+To read your own balance, the frontend calls `userDecrypt` from the Zama Relayer SDK. The flow uses EIP-712 structured data so that the Zama KMS can verify you own the address before releasing the plaintext:
+
+<Steps>
+  <Step title="Generate a keypair">
+    The SDK generates a temporary asymmetric keypair in your browser. The public key is bound to the contract address and a time window.
+  </Step>
+  <Step title="Sign the request">
+    Your wallet signs an EIP-712 typed message — `UserDecryptRequestVerification` — that commits to the public key, the contract addresses, the start timestamp, and the duration.
+  </Step>
+  <Step title="KMS decryption">
+    The signed request is sent to the Zama KMS. The threshold network verifies the signature, confirms you are the authorized holder, and returns the plaintext encrypted under your temporary public key.
+  </Step>
+  <Step title="Local decryption">
+    The SDK decrypts the result locally using the temporary private key. The plaintext never leaves your session in an unencrypted form accessible to any server.
+  </Step>
+</Steps>
+
+The mini-relayer at `/api/decrypt/user-decrypt` proxies KMS requests for environments where a direct connection is not available, but it never sees the decrypted value — results are encrypted under your ephemeral public key.
+
+## Observer model
+
+Token owners can designate **observer addresses** when creating a token, or add them later with `addObserver()`. Observers are typically compliance addresses — auditors, regulators, or internal treasury wallets — that need visibility into all balances without disrupting normal transfers.
+
+```solidity
+/// @notice Compliance observers that can decrypt any balance (auditors, regulators)
+mapping(address => bool) public isObserver;
+address[] public observers;
+```
+
+Every time a balance ciphertext is updated, the contract calls `_allowObservers()` to grant each observer address FHE access to the new ciphertext:
+
+```solidity
+function _allowObservers(euint64 ct) internal {
+    for (uint256 i = 0; i < observers.length; i++) {
+        FHE.allow(ct, observers[i]);
+    }
+}
+```
+
+<Warning>
+  Observer addresses and the `isObserver` mapping are publicly readable on-chain. Anyone can call `getObservers()` or read the `observers` array to see which addresses have been granted observer status for a given token.
+</Warning>
+
+Observers can decrypt any balance but **cannot transfer tokens** on behalf of holders. Observer status is a read-only privilege.
+
+## Encrypted allowances
+
+`approve()` and `transferFrom()` use encrypted allowances (`euint64`) rather than plaintext `uint256` values:
+
+```solidity
+mapping(address => mapping(address => euint64)) internal _allowances;
+```
+
+When a spender calls `transferFrom()`, the contract checks both the allowance and the sender's balance using encrypted comparisons. Neither value is revealed during the check. If either condition fails, the transfer silently sends `0`.
+
+## What is visible on-chain
+
+Some information is necessarily public on Ethereum:
+
+| Data | Visibility |
+|---|---|
+| Sender and receiver addresses | Public — visible in `Transfer` event topics |
+| Transfer amount | Always `0` in events |
+| Total supply | Public — plaintext `uint64` |
+| Observer addresses | Public — readable from `observers[]` array |
+| Token name, symbol, decimals | Public |
+| Block timestamps | Public |
+| Whether a transfer occurred | Public (the event is emitted) |
+| Balance values | Private — stored as `euint64` ciphertexts |
+| Allowance values | Private — stored as `euint64` ciphertexts |
+
+---
+
+<AccordionGroup>
+  <Accordion title="Can the relayer see my balance?">
+    No. The relayer only submits KMS proofs to finalize unwrap and payment transactions. For user balance decryption, the SDK routes the request through `/api/decrypt/user-decrypt`, but the decryption result is returned encrypted under your ephemeral public key. The server never receives the plaintext — only your browser, which holds the matching private key, can decrypt it.
+  </Accordion>
+  <Accordion title="What if I lose access to my wallet?">
+    Encrypted balances are cryptographically tied to your Ethereum address. The KMS requires a valid EIP-712 signature from that address before it will authorize decryption. Without your wallet's private key, you cannot generate the signature, and the KMS will not release the plaintext. There is no recovery mechanism — treat your wallet key like your balance.
+  </Accordion>
+  <Accordion title="Are observer addresses public?">
+    Yes. The `observers[]` array and `isObserver` mapping are public state variables on each `HideMeToken` contract. Anyone can read them directly from chain storage or by calling `getObservers()`. If you are creating a token, choose observer addresses with this in mind.
+  </Accordion>
+</AccordionGroup>

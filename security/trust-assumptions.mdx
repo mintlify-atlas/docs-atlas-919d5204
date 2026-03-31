@@ -1,0 +1,89 @@
+---
+title: "Trust assumptions"
+description: "What you are trusting when you use HideMe, and the design decisions that minimize that trust."
+keywords: ["trust", "KMS", "gateway chain", "relayer", "immutable contracts", "decentralization", "Zama"]
+---
+
+HideMe is designed to minimize the trust you place in any single party. This page explains the three external trust layers the system relies on, what each one can and cannot do, and the contract-level design decisions that bound the risk.
+
+## The three trust layers
+
+<Steps>
+  <Step title="Zama KMS network">
+    The Zama Key Management Service (KMS) is a **threshold network** of independent nodes that collectively hold the FHE master key. Decrypting any ciphertext — whether a user balance or a public unwrap result — requires a threshold of KMS nodes to independently sign the decryption response.
+
+    No single node can decrypt unilaterally. A minority of compromised nodes cannot produce a valid decryption proof.
+
+    <Warning>
+      If a majority of KMS nodes are compromised simultaneously, encrypted balances could theoretically be decrypted without the holder's consent. This is the primary trust assumption in HideMe. The security of your balances ultimately depends on the liveness and integrity of the Zama threshold network.
+    </Warning>
+
+    The KMS handles two distinct decryption paths:
+
+    - **User decrypt**: triggered by your EIP-712 signed request. The result is returned encrypted under your ephemeral public key and never touches any server in plaintext.
+    - **Public decrypt**: triggered on-chain when a ciphertext is marked `makePubliclyDecryptable()` (for unwrap and payment finalization). The KMS returns threshold signatures that are verified on-chain by `FHE.checkSignatures()`.
+  </Step>
+  <Step title="Gateway chain">
+    The Gateway Chain coordinates public decryption requests. When a `ConfidentialWrapper` calls `FHE.makePubliclyDecryptable(canUnwrap)`, the Gateway Chain picks up the request, the KMS nodes produce threshold signatures over the plaintext result, and those signatures are relayed back to Ethereum mainnet.
+
+    On mainnet, `FHE.checkSignatures()` verifies the threshold signatures before any funds move:
+
+    ```solidity
+    FHE.checkSignatures(handlesList, cleartexts, decryptionProof);
+    bool canUnwrap = abi.decode(cleartexts, (bool));
+    ```
+
+    The Gateway Chain is a coordination layer — it does not hold funds and cannot initiate transfers. If it is unavailable, pending unwrap and payment requests will stall, but funds remain locked in the wrapper contract until finalized or cancelled after the 1-day timeout.
+  </Step>
+  <Step title="Relayer wallet">
+    The relayer wallet (configured via `GATEWAY_RELAYER_PRIVATE_KEY`) submits `finalizeUnwrap` and `finalize` transactions on behalf of users, reimbursed by the small ETH fee collected at payment creation time.
+
+    The relayer is **non-custodial**: it holds no tokens and has no special on-chain permissions. The `finalize()` and `finalizeUnwrap()` functions are permissionless — anyone can call them with a valid KMS proof. The relayer is a convenience, not a gatekeeper.
+
+    <Note>
+      If the relayer goes offline, you can finalize your own transactions by calling `finalize(paymentId, handlesList, cleartexts, decryptionProof)` directly from any wallet. You can also cancel a stalled request and recover your funds after the 1-day timeout.
+    </Note>
+  </Step>
+</Steps>
+
+## Design decisions that minimize trust
+
+HideMe's contracts include deliberate constraints to ensure that no single party — including the deployer — can harm token holders.
+
+<CardGroup cols={2}>
+  <Card title="No pause mechanism" icon="ban">
+    There is no `pause()` function and no circuit breaker. Contracts cannot be frozen by any party. Transfers always execute as long as the EVM is live.
+  </Card>
+  <Card title="No blacklist" icon="shield-off">
+    There is no `blacklist` or `blocklist`. No address can be prevented from sending or receiving tokens. All transfers are subject only to the encrypted balance check.
+  </Card>
+  <Card title="Observer model" icon="eye">
+    Compliance is achieved through the observer model rather than admin controls. Observers can view balances but cannot block transfers, freeze accounts, or access funds.
+  </Card>
+  <Card title="1-day unwrap timeout" icon="clock">
+    If a pending unwrap or payment is not finalized within 1 day, the original sender can call `cancelUnwrap()` or `cancel()` to recover their funds. There is no scenario in which funds are permanently locked.
+  </Card>
+</CardGroup>
+
+### Silent failures are intentional
+
+When an encrypted comparison determines that a transfer cannot proceed (insufficient balance or allowance), the contract silently sends `0` instead of reverting. This is the standard FHE pattern — a revert would allow balance probing via repeated failed transactions. The silent failure closes that information channel.
+
+### Immutable contracts
+
+<Note>
+  HideMe contracts are immutable. There are no proxy contracts, no upgrade mechanisms, and no admin keys that could swap out the implementation. What is deployed is what runs — forever.
+</Note>
+
+Once a `HideMeToken` or `ConfidentialWrapper` is deployed, its logic cannot change. The deployer retains only the privileges explicitly defined in the constructor parameters: minting (if `mintable` was set), adding observers, and transferring or renouncing ownership. All of these can be permanently disabled by calling `renounceOwnership()`.
+
+## Trust surface summary
+
+| Component | What it can do | What it cannot do |
+|---|---|---|
+| Zama KMS network | Decrypt ciphertexts when threshold reached | Steal tokens, block transfers |
+| Gateway Chain | Relay public decryption proofs | Hold funds, initiate transfers |
+| Relayer wallet | Submit finalization transactions | Access funds, pause contracts |
+| Token owner | Mint (if enabled), add/remove observers | Freeze accounts, modify balances |
+| Observers | Decrypt any balance | Transfer tokens, modify state |
+| Anyone | Call `finalize()`, `cancelUnwrap()` | Override encrypted balance checks |

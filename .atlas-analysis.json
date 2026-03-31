@@ -1,0 +1,114 @@
+{
+  "projectType": "saas",
+  "projectName": "HideMe",
+  "projectDescription": "A confidential token platform on Ethereum that lets users create, transfer, and pay with fully encrypted ERC-20 tokens powered by Fully Homomorphic Encryption (FHE) via Zama's fhEVM.",
+  "theme": "luma",
+  "primaryColor": "#868686",
+  "lightColor": "#161514",
+  "darkColor": "#d2c9a8",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "how-it-works"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/token-registry",
+              "features/encrypted-transfers",
+              "features/private-portfolio",
+              "features/confidential-payments",
+              "features/payment-links"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/setup",
+              "development/environment-variables",
+              "development/deploying-contracts"
+            ]
+          },
+          {
+            "group": "Security & Architecture",
+            "pages": [
+              "security/privacy-model",
+              "security/trust-assumptions",
+              "security/architecture"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Smart Contracts",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "contracts/overview",
+              "contracts/deployed-addresses"
+            ]
+          },
+          {
+            "group": "Contract Reference",
+            "pages": [
+              "contracts/hideme-token",
+              "contracts/hideme-factory",
+              "contracts/confidential-wrapper",
+              "contracts/wrapper-factory",
+              "contracts/payment-router-v2",
+              "contracts/confidential-payments"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Fully Homomorphic Encryption (FHE) for on-chain encrypted balances via Zama fhEVM",
+    "Native confidential ERC-20 tokens with euint64 encrypted balances",
+    "ERC-20 wrapping into confidential cTokens (e.g., cWETH, cUSDC)",
+    "Confidential payments where sender amount is hidden but receiver gets plain ERC-20",
+    "Private portfolio management with single-signature batch decrypt",
+    "Payment links for merchant fixed-amount confidential payments",
+    "Compliance observer model for regulatory access without compromising holder privacy",
+    "Client-side TFHE WASM encryption with on-chain input verification"
+  ],
+  "publicApiSurface": [
+    "HideMeToken.transfer(address, externalEuint64, bytes)",
+    "HideMeToken.transferPlaintext(address, uint64)",
+    "HideMeToken.mint(address, uint64)",
+    "HideMeToken.burn(uint64)",
+    "HideMeToken.approve(address, externalEuint64, bytes)",
+    "HideMeToken.transferFrom(address, address, externalEuint64, bytes)",
+    "HideMeToken.balanceOf(address) returns euint64",
+    "HideMeToken.addObserver(address)",
+    "HideMeToken.removeObserver(address)",
+    "HideMeFactory.createToken(CreateParams)",
+    "HideMeFactory.getTokensPaginated(uint256, uint256)",
+    "HideMeFactory.getAllTokens()",
+    "ConfidentialWrapper.wrap(uint256)",
+    "ConfidentialWrapper.unwrap(uint64) returns uint256",
+    "ConfidentialWrapper.finalizeUnwrap(uint256, bytes32[], bytes, bytes)",
+    "ConfidentialWrapper.cancelUnwrap(uint256)",
+    "ConfidentialWrapper.transferPlaintext(address, uint64)",
+    "WrapperFactory.createWrapper(address)",
+    "WrapperFactory.getWrapper(address)",
+    "ConfidentialPaymentRouterV2.send(address, address, uint256, string) payable",
+    "ConfidentialPaymentRouterV2.finalize(uint256, bytes32[], bytes, bytes)",
+    "ConfidentialPaymentRouterV2.cancel(uint256)",
+    "ConfidentialPayments.payLink(uint256)",
+    "encryptAmount(contractAddress, userAddress, amount)",
+    "decryptUserBalance(contractAddress, ciphertextHandle, walletClient)",
+    "decryptMultipleBalances(pairs, walletClient)",
+    "getFhevmInstance()"
+  ]
+}

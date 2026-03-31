@@ -1,0 +1,115 @@
+---
+title: "Development Setup"
+description: "Get HideMe running locally — frontend and contracts."
+---
+
+## Prerequisites
+
+Before you begin, make sure you have the following installed and configured:
+
+- **Node.js 20+** — required by both the frontend and the contracts package
+- **pnpm or npm** — either package manager works; examples below use `npm`
+- **A wallet with ETH on Ethereum mainnet** — needed only if you plan to deploy contracts or interact with mainnet
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Frontend | Next.js 16 + React 19 | Server components, API routes, Turbopack |
+| Styling | Tailwind CSS 4 | Dark theme with gold accent |
+| Wallet | Wagmi 2 + RainbowKit 2 | Wallet connection, contract interaction |
+| Encryption | Zama fhEVM + TFHE | Fully Homomorphic Encryption on-chain |
+| Contracts | Solidity 0.8.27 + Hardhat | FHE-enabled smart contracts |
+| Chain | Ethereum Mainnet | Production deployment |
+
+## Frontend Setup
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/collinsville22/Hideme.git
+    cd Hideme
+    ```
+  </Step>
+
+  <Step title="Install frontend dependencies">
+    ```bash
+    cd frontend
+    npm install
+    ```
+
+    <Note>
+      The `postinstall` script runs automatically after `npm install`. It executes `scripts/copy-sdk.js`, which copies the Zama TFHE WASM bundles — `tfhe_bg.wasm`, `kms_lib_bg.wasm`, and `relayer-sdk.js` — from `node_modules/@zama-fhe/relayer-sdk` into `public/sdk/`. These files must be served statically for the in-browser FHE client to function. You do not need to run this script manually.
+    </Note>
+  </Step>
+
+  <Step title="Configure environment variables">
+    ```bash
+    cp .env.local.example .env.local
+    ```
+
+    Open `.env.local` and set the contract addresses and your relayer private key. See [Environment Variables](/development/environment-variables) for a full reference on every variable.
+  </Step>
+
+  <Step title="Start the development server">
+    ```bash
+    npm run dev
+    ```
+
+    The app starts on [http://localhost:3000](http://localhost:3000). Turbopack is used by default for fast hot-module replacement.
+  </Step>
+</Steps>
+
+## Contracts Setup
+
+<Steps>
+  <Step title="Install contract dependencies">
+    ```bash
+    cd contracts
+    npm install
+    ```
+  </Step>
+
+  <Step title="Compile the contracts">
+    ```bash
+    npx hardhat compile
+    ```
+
+    This compiles all Solidity files under `contracts/contracts/` using Solidity 0.8.27 with the `cancun` EVM target and generates TypeChain bindings in `types/`.
+  </Step>
+
+  <Step title="Configure the deployer credentials">
+    The contracts project uses Hardhat configuration variables (not a `.env` file). Set your mnemonic and RPC key with:
+
+    ```bash
+    npx hardhat vars set MNEMONIC
+    npx hardhat vars set INFURA_API_KEY
+    ```
+
+    The first account derived from `MNEMONIC` is used as the deployer. Alternatively, you can pass a `PRIVATE_KEY` directly if you adapt `hardhat.config.ts` to use `accounts: [process.env.PRIVATE_KEY]`.
+
+    <Warning>
+      Never commit your mnemonic or private key to version control.
+    </Warning>
+  </Step>
+
+  <Step title="Deploy the factory contract">
+    ```bash
+    npx hardhat deploy --network mainnet --tags HideMeFactory
+    ```
+
+    For a full deployment sequence covering all four contracts, see [Deploying Contracts](/development/deploying-contracts).
+  </Step>
+</Steps>
+
+## Zama TFHE WASM Bundles
+
+The frontend uses Zama's `@zama-fhe/relayer-sdk` package, which bundles the TFHE WebAssembly module. Because Next.js cannot bundle WASM files directly, the `scripts/copy-sdk.js` helper copies three files into `public/sdk/` so they are served as static assets:
+
+| File | Purpose |
+|---|---|
+| `tfhe_bg.wasm` | TFHE encryption/decryption WebAssembly binary |
+| `kms_lib_bg.wasm` | KMS client WebAssembly binary |
+| `relayer-sdk.js` | JavaScript glue layer for both WASM modules |
+
+The copy step runs automatically on `postinstall` and as part of `npm run build`. If you ever delete `public/sdk/` or upgrade `@zama-fhe/relayer-sdk`, run `node scripts/copy-sdk.js` from the `frontend/` directory to restore the files.

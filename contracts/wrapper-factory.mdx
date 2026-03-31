@@ -1,0 +1,90 @@
+---
+title: "WrapperFactory"
+description: "Deploys and tracks ConfidentialWrapper instances — one per ERC-20 token. Used by the payment router to find wrappers automatically."
+---
+
+`WrapperFactory` enforces a one-wrapper-per-ERC-20 policy. Anyone can create a wrapper for any ERC-20 that has at least 6 decimals. Once created, the wrapper is permanently registered and discoverable.
+
+**Mainnet address:** [`0xde8d3122329916968BA9c5E034Bbade431687408`](https://etherscan.io/address/0xde8d3122329916968BA9c5E034Bbade431687408)
+
+## createWrapper
+
+```solidity
+function createWrapper(address erc20Token) external returns (address wrapper)
+```
+
+Deploy a new `ConfidentialWrapper` for the given ERC-20 token.
+
+<ParamField path="erc20Token" type="address" required>
+  The underlying ERC-20 token address. Must have `decimals() >= 6`. Cannot be `address(0)`. A wrapper must not already exist for this token.
+</ParamField>
+
+Returns the address of the deployed `ConfidentialWrapper`.
+
+<Note>
+`ConfidentialPaymentRouterV2` calls this automatically if a wrapper doesn't exist yet when you send a payment.
+</Note>
+
+## getWrapper
+
+```solidity
+function getWrapper(address erc20Token) external view returns (address)
+```
+
+Returns the wrapper address for a given ERC-20, or `address(0)` if none exists.
+
+## totalWrappers
+
+```solidity
+function totalWrappers() external view returns (uint256)
+```
+
+Returns the total number of wrappers deployed through this factory.
+
+## getWrappersPaginated
+
+```solidity
+function getWrappersPaginated(uint256 offset, uint256 limit)
+    external view returns (WrapperInfo[] memory)
+```
+
+Paginated list of all wrappers with token metadata.
+
+### WrapperInfo struct
+
+<ResponseField name="erc20Token" type="address">
+  The underlying ERC-20 token address.
+</ResponseField>
+<ResponseField name="wrapper" type="address">
+  The deployed ConfidentialWrapper address.
+</ResponseField>
+<ResponseField name="tokenName" type="string">
+  Underlying token name.
+</ResponseField>
+<ResponseField name="tokenSymbol" type="string">
+  Underlying token symbol.
+</ResponseField>
+<ResponseField name="tokenDecimals" type="uint8">
+  Underlying token decimals.
+</ResponseField>
+<ResponseField name="wrapperName" type="string">
+  cToken name (e.g. `"Confidential Wrapped Ether"`).
+</ResponseField>
+<ResponseField name="wrapperSymbol" type="string">
+  cToken symbol (e.g. `"cWETH"`).
+</ResponseField>
+
+## Events
+
+| Event | Parameters |
+|-------|-----------|
+| `WrapperCreated` | `erc20Token, wrapper, name, symbol, creator` |
+
+<CardGroup cols={2}>
+  <Card title="ConfidentialWrapper" icon="box" href="/contracts/confidential-wrapper">
+    Full reference for the wrapper contract.
+  </Card>
+  <Card title="PaymentRouterV2" icon="route" href="/contracts/payment-router-v2">
+    How the router uses WrapperFactory to find wrappers.
+  </Card>
+</CardGroup>

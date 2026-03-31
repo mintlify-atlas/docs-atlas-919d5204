@@ -1,0 +1,208 @@
+---
+title: "How it works"
+description: "HideMe stores encrypted balances on Ethereum L1, uses the Zama KMS network for threshold key management, and coordinates public decryption through a Gateway Chain."
+---
+
+HideMe is built on Zama's [fhEVM](https://docs.zama.ai/fhevm) — a coprocessor that brings Fully Homomorphic Encryption to the EVM. This page explains the three-layer architecture, the on-chain FHE primitives, and the privacy properties you can rely on.
+
+## Three-layer architecture
+
+```
+┌───────────────────────────────────────────────────┐
+│              FRONTEND (Next.js)                   │
+│   TFHE WASM encrypts amounts client-side          │
+└───────────────────────┬───────────────────────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+        ▼               ▼               ▼
+┌──────────────┐ ┌────────────┐ ┌──────────────────┐
+│ Ethereum L1  │ │  Zama KMS  │ │  Gateway Chain   │
+│              │ │  Network   │ │                  │
+│ euint64      │ │ Threshold  │ │ Public decrypt   │
+│ ciphertexts  │ │ key mgmt   │ │ Unwrap proofs    │
+│ FHE arith    │ │ User decr  │ │ Threshold sigs   │
+└──────────────┘ └────────────┘ └──────────────────┘
+```
+
+### Layer 1: Ethereum mainnet
+
+Ethereum stores balances as `euint64` ciphertexts — FHE-encrypted 64-bit unsigned integers. Every HideMeToken maps `address → euint64`, not `address → uint256`. The EVM performs addition, subtraction, and comparison directly on these ciphertexts without ever decrypting them.
+
+The ACL (Access Control List) contract tracks which addresses are permitted to request decryption of each ciphertext handle. When a balance is updated, the contract calls `FHE.allow(newBalance, holder)` to grant decrypt permission to the holder, and `FHE.allow(newBalance, observer)` for each registered compliance observer.
+
+### Layer 2: Zama KMS network
+
+The Zama Key Management Service runs a distributed threshold network that holds the FHE master private key. No single node can decrypt a ciphertext alone — a threshold of nodes must cooperate.
+
+When you request to see your balance, the KMS network:
+1. Verifies your EIP-712 signature to confirm you are the account owner
+2. Checks the on-chain ACL to confirm the ciphertext handle grants you decrypt access
+3. Returns the plaintext value encrypted under your temporary session public key
+4. Your browser decrypts locally using the corresponding temporary private key
+
+Your balance never leaves the KMS network in plaintext.
+
+### Layer 3: Gateway Chain
+
+The Gateway Chain coordinates **public** decryption requests — operations where a plaintext result needs to be verified and used on-chain. This is required for the unwrap flow (converting cTokens back to plain ERC-20) and for the confidential payment router.
+
+When `ConfidentialWrapper` calls `FHE.makePubliclyDecryptable(canUnwrap)`, the Gateway Chain collects threshold signatures from the KMS network and submits a proof. The relayer then calls `finalizeUnwrap(requestId, proof)` with this proof to complete the operation.
+
+## Token flows
+
+### Mint flow
+
+When the owner mints tokens, the plaintext amount is encrypted on-chain:
+
+```
+MINT FLOW
+  Owner calls mint(to, amount)
+  → FHE.asEuint64(amount) encrypts the plaintext on-chain
+  → FHE.add(balance[to], encrypted) updates the ciphertext
+  → FHE.allow(newBalance, to) grants decrypt access to the recipient
+  → FHE.allow(newBalance, observer) for each compliance observer
+  → Transfer event emitted with amount = 0
+```
+
+The Solidity implementation in `HideMeToken.sol`:
+
+```solidity
+function _mint(address to, uint64 amount) internal {
+    euint64 encAmount = FHE.asEuint64(amount);
+    euint64 newBalance = FHE.add(_balances[to], encAmount);
+    _balances[to] = newBalance;
+
+    FHE.allowThis(newBalance);
+    FHE.allow(newBalance, to);
+    _allowObservers(newBalance);
+
+    totalSupply += amount;
+    emit Transfer(address(0), to, 0);
+}
+```
+
+### Transfer flow
+
+Encrypted transfers use a client-side TFHE proof to move tokens without revealing the amount:
+
+```
+TRANSFER FLOW
+  Sender encrypts amount in browser using TFHE WASM
+  → encryptAmount() returns { handle, inputProof }
+
+  Sender calls transfer(to, encryptedAmount, inputProof)
+  → FHE.fromExternal() verifies the inputProof on-chain
+  → FHE.le(amount, balance[from]) checks sufficiency (still encrypted)
+  → FHE.select(canTransfer, amount, 0) — if can't transfer, use 0
+  → FHE.sub(balance[from], transferValue) — deduct from sender
+  → FHE.add(balance[to], transferValue) — credit receiver
+  → FHE.allow() grants decrypt access to both parties and observers
+  → Transfer event emitted with amount = 0
+```
+
+The core logic in `_transfer`:
+
+```solidity
+function _transfer(address from, address to, euint64 amount) internal {
+    ebool canTransfer = FHE.le(amount, _balances[from]);
+    euint64 transferValue = FHE.select(canTransfer, amount, FHE.asEuint64(0));
+
+    euint64 newBalanceFrom = FHE.sub(_balances[from], transferValue);
+    _balances[from] = newBalanceFrom;
+    FHE.allowThis(newBalanceFrom);
+    FHE.allow(newBalanceFrom, from);
+    _allowObservers(newBalanceFrom);
+
+    euint64 newBalanceTo = FHE.add(_balances[to], transferValue);
+    _balances[to] = newBalanceTo;
+    FHE.allowThis(newBalanceTo);
+    FHE.allow(newBalanceTo, to);
+    _allowObservers(newBalanceTo);
+
+    emit Transfer(from, to, 0);
+}
+```
+
+## FHE primitives
+
+HideMeToken uses these fhEVM operations, all from the `FHE` library in `@fhevm/solidity`:
+
+| Primitive | Purpose |
+|---|---|
+| `FHE.asEuint64(x)` | Encrypt a plaintext `uint64` on-chain into a ciphertext |
+| `FHE.fromExternal(handle, proof)` | Verify and import a client-side encrypted value |
+| `FHE.add(a, b)` | Add two encrypted values, return encrypted result |
+| `FHE.sub(a, b)` | Subtract two encrypted values, return encrypted result |
+| `FHE.le(a, b)` | Encrypted comparison — returns `ebool` (encrypted boolean) |
+| `FHE.select(cond, a, b)` | Encrypted conditional — returns `a` if `cond` is true, else `b` |
+| `FHE.allow(ct, addr)` | Grant `addr` permission to decrypt ciphertext `ct` |
+| `FHE.allowThis(ct)` | Grant the current contract permission to use `ct` |
+| `FHE.isSenderAllowed(ct)` | Check that `msg.sender` is permitted to use `ct` |
+| `FHE.makePubliclyDecryptable(ct)` | Request a public (on-chain) decryption via Gateway Chain |
+
+## Privacy properties
+
+### Why transfer events emit `amount = 0`
+
+The `Transfer(from, to, uint256 amount)` event is required by ERC-20 tooling (block explorers, wallets, indexers). Emitting the real encrypted amount would leak the ciphertext handle publicly, and emitting a plaintext amount would obviously destroy privacy. Instead, HideMe always emits `0` for the amount field. The event still records the sender, recipient, and block timestamp, but reveals nothing about the value transferred.
+
+```solidity
+/// @dev Amount is always 0 in events to prevent leaking encrypted data
+event Transfer(address indexed from, address indexed to, uint256 amount);
+```
+
+### Silent failure on insufficient balance
+
+In a standard ERC-20, transferring more than your balance reverts the transaction. A revert is observable on-chain — it tells anyone watching that your balance is less than the attempted amount. This is an information leak in a confidential token system.
+
+HideMe uses an FHE-native pattern instead:
+
+```solidity
+ebool canTransfer = FHE.le(amount, _balances[from]);
+euint64 transferValue = FHE.select(canTransfer, amount, FHE.asEuint64(0));
+```
+
+`FHE.le()` performs an encrypted comparison. `FHE.select()` picks `amount` if the balance is sufficient, or `0` if it is not — entirely on encrypted values. The transaction succeeds either way, but a transfer of `0` is sent when the sender has insufficient funds. An observer cannot distinguish a successful transfer from a failed one by watching the chain.
+
+## Frequently asked questions
+
+<AccordionGroup>
+  <Accordion title="Can anyone see my balance?">
+    No. Your balance is stored on-chain as a `euint64` ciphertext — an FHE-encrypted 64-bit integer. Only you (and any observer addresses configured on the token) can request a decryption from the Zama KMS network. The KMS verifies your EIP-712 signature and checks the on-chain ACL before returning anything. Block explorers, indexers, and other wallet addresses see only an opaque ciphertext handle.
+  </Accordion>
+  <Accordion title="What is an observer?">
+    An observer is a compliance or audit address that the token owner designates at creation time (or later via `addObserver()`). Observers are granted decrypt access to every balance ciphertext via `FHE.allow(ct, observer)` on every mint, transfer, and burn. This allows a regulator or auditor to verify holdings without exposing them to the public. Observers do not have any transfer or mint authority — they can only read balances.
+
+    ```solidity
+    /// @notice Compliance observers that can decrypt any balance (auditors, regulators)
+    mapping(address => bool) public isObserver;
+    ```
+
+    The token owner can add or remove observers at any time with `addObserver()` and `removeObserver()`. Renouncing ownership permanently disables both functions.
+  </Accordion>
+  <Accordion title="How does client-side encryption work?">
+    When you initiate a transfer, the HideMe frontend loads Zama's TFHE WASM library (`relayer-sdk.js`) in your browser. The `encryptAmount()` function calls `createEncryptedInput(contractAddress, userAddress)`, adds the `uint64` value, and calls `.encrypt()`. This produces two outputs:
+
+    - **handle**: a reference to the ciphertext, submitted as the `externalEuint64` argument to `transfer()`
+    - **inputProof**: a zero-knowledge proof that the encrypted value was formed correctly for the specified contract and caller
+
+    On-chain, `FHE.fromExternal(encryptedAmount, inputProof)` verifies the proof against the InputVerifier contract before accepting the ciphertext. This prevents a malicious caller from submitting an arbitrary ciphertext they didn't create.
+
+    The encryption happens entirely in your browser. The plaintext amount is never sent to any server.
+  </Accordion>
+  <Accordion title="What happens during an unwrap?">
+    Unwrapping a cToken back to a plain ERC-20 requires a two-step process because the plaintext amount needs to be verified on-chain before the ERC-20 is released.
+
+    **Step 1**: You call `unwrap(amount)`. The contract performs `FHE.le(amount, balance)` to check sufficiency (encrypted), then calls `FHE.makePubliclyDecryptable(canUnwrap)`. This queues a decryption request on the Gateway Chain. Your account is locked from further transfers until finalization.
+
+    **Step 2**: The relayer monitors the Gateway Chain for completed decryption proofs. When the Zama KMS network produces a threshold signature, the relayer calls `finalizeUnwrap(requestId, proof)`. The contract verifies the proof, and if `canUnwrap` is true, burns the cToken balance and transfers the underlying ERC-20 back to you.
+
+    If finalization does not happen within 1 day, you can cancel the unwrap to unlock your account.
+  </Accordion>
+  <Accordion title="Do I need to run any infrastructure?">
+    No. The Zama KMS network and Gateway Chain are operated by Zama. The relayer for finalizing unwraps and payments is run by HideMe. If you want to run your own relayer, you can — finalization transactions are permissionless and anyone can submit them with a valid KMS proof.
+
+    For local development or environments without direct Zama relayer access, set `NEXT_PUBLIC_USE_MINI_RELAYER=true` in your environment. This routes user decrypt requests through the app's own `/api/decrypt/user-decrypt` endpoint, which signs and submits the decryption request to the Zama Gateway Chain using the server-side relayer key.
+  </Accordion>
+</AccordionGroup>

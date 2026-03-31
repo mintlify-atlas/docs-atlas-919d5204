@@ -1,0 +1,142 @@
+---
+title: "ConfidentialPayments"
+description: "Payment links for HideMeToken. Merchants create fixed-amount shareable payment requests; payers fulfill them in one transaction with on-chain FHE encryption."
+---
+
+`ConfidentialPayments` is a payment link registry for **HideMeToken** (native confidential tokens). Merchants create links with a fixed amount; payers fulfill them by calling `payLink()`, which triggers `transferPlaintext` on the token — encrypting the transfer on-chain.
+
+**Mainnet address:** [`0xA12c43CFCe337f0f8b831551Fbd273A61b0488d5`](https://etherscan.io/address/0xA12c43CFCe337f0f8b831551Fbd273A61b0488d5)
+
+<Note>
+This contract works with **HideMeToken** only. For confidential payments with any ERC-20 (WETH, USDC, etc.), see [ConfidentialPaymentRouterV2](/contracts/payment-router-v2).
+</Note>
+
+## createPaymentLink
+
+```solidity
+function createPaymentLink(
+    address token,
+    uint64 amount,
+    string calldata memo,
+    uint256 expiry
+) external returns (bytes32 linkId)
+```
+
+Create a new payment link. The link ID is a `keccak256` hash of the parameters and block timestamp.
+
+<ParamField path="token" type="address" required>
+  A HideMeToken contract address.
+</ParamField>
+<ParamField path="amount" type="uint64" required>
+  Fixed payment amount in raw token units (6 decimals). For example, `50_000_000` = 50 tokens.
+</ParamField>
+<ParamField path="memo" type="string" required>
+  Human-readable description (e.g. `"Invoice #42"`).
+</ParamField>
+<ParamField path="expiry" type="uint256" required>
+  Unix timestamp after which the link cannot be paid. Pass `0` for no expiry.
+</ParamField>
+
+Returns `bytes32 linkId`.
+
+## payLink
+
+```solidity
+function payLink(bytes32 linkId) external
+```
+
+Fulfill a payment link. Calls `token.transferPlaintext(merchant, amount)` on the payer's behalf — the amount is encrypted on-chain inside the EVM.
+
+<Warning>
+The payer must hold sufficient HideMeToken balance. Due to FHE's silent-failure pattern, an insufficient balance results in a 0-amount transfer, but the link is still marked as paid.
+</Warning>
+
+## cancelLink
+
+```solidity
+function cancelLink(bytes32 linkId) external
+```
+
+Cancel an unpaid payment link. Only the merchant (link creator) can cancel. Paid links cannot be cancelled.
+
+## getLink
+
+```solidity
+function getLink(bytes32 linkId) external view returns (
+    address token,
+    address merchant,
+    uint64 amount,
+    string memory memo,
+    uint256 expiry,
+    bool paid,
+    bool cancelled,
+    address payer,
+    uint256 paidAt
+)
+```
+
+## getMerchantLinks
+
+```solidity
+function getMerchantLinks(address merchant) external view returns (bytes32[] memory)
+```
+
+Returns all link IDs created by the given merchant address.
+
+## PaymentLink struct fields
+
+<ResponseField name="token" type="address">
+  The HideMeToken contract address.
+</ResponseField>
+<ResponseField name="merchant" type="address">
+  Address that created the link and receives payment.
+</ResponseField>
+<ResponseField name="amount" type="uint64">
+  Fixed amount in token units (6 decimals).
+</ResponseField>
+<ResponseField name="memo" type="string">
+  Description set at creation time.
+</ResponseField>
+<ResponseField name="expiry" type="uint256">
+  Expiry timestamp. `0` = no expiry.
+</ResponseField>
+<ResponseField name="paid" type="bool">
+  Whether the link has been fulfilled.
+</ResponseField>
+<ResponseField name="cancelled" type="bool">
+  Whether the merchant cancelled the link.
+</ResponseField>
+<ResponseField name="payer" type="address">
+  Address that paid (`address(0)` if unpaid).
+</ResponseField>
+<ResponseField name="paidAt" type="uint256">
+  Block timestamp of payment (`0` if unpaid).
+</ResponseField>
+
+## Events
+
+| Event | Parameters |
+|-------|-----------|
+| `LinkCreated` | `linkId, merchant, token` |
+| `LinkPaid` | `linkId, payer, paidAt` |
+| `LinkCancelledEvent` | `linkId` |
+
+## Custom errors
+
+| Error | When thrown |
+|-------|------------|
+| `LinkNotFound` | `linkId` does not exist |
+| `LinkAlreadyPaid` | Link has already been paid |
+| `LinkExpired` | Current time exceeds `expiry` |
+| `LinkNotExpired` | (reserved) |
+| `NotMerchant` | Caller is not the link creator |
+| `LinkCancelled` | Link was cancelled |
+
+<CardGroup cols={2}>
+  <Card title="Payment Links" icon="link" href="/features/payment-links">
+    How to use payment links from the frontend.
+  </Card>
+  <Card title="PaymentRouterV2" icon="route" href="/contracts/payment-router-v2">
+    For confidential payments with any ERC-20.
+  </Card>
+</CardGroup>

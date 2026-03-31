@@ -1,0 +1,129 @@
+---
+title: "Environment Variables"
+description: "All environment variables required to run the HideMe frontend."
+---
+
+The frontend reads its configuration from a `.env.local` file in the `frontend/` directory. Copy `.env.local.example` to `.env.local` and fill in the values described below before running `npm run dev` or `npm run build`.
+
+```bash
+cp .env.local.example .env.local
+```
+
+---
+
+## Contract Addresses
+
+<ParamField query="NEXT_PUBLIC_FACTORY_ADDRESS_MAINNET" type="string" required>
+  The deployed address of the `HideMeFactory` contract on Ethereum mainnet.
+
+  This is used when `NEXT_PUBLIC_NETWORK` is set to `"mainnet"`. The production address is `0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B`.
+
+  ```
+  NEXT_PUBLIC_FACTORY_ADDRESS_MAINNET=0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B
+  ```
+</ParamField>
+
+<ParamField query="NEXT_PUBLIC_FACTORY_ADDRESS" type="string">
+  The deployed address of the `HideMeFactory` contract on Sepolia testnet.
+
+  Used when `NEXT_PUBLIC_NETWORK` is set to `"sepolia"` (the default). Set this to your own Sepolia deployment address during development and testing.
+
+  ```
+  NEXT_PUBLIC_FACTORY_ADDRESS=0xYourSepoliaFactoryAddress
+  ```
+</ParamField>
+
+---
+
+## Network Selection
+
+<ParamField query="NEXT_PUBLIC_NETWORK" type="string" default="sepolia">
+  Controls which network the frontend connects to. Accepted values are `"mainnet"` and `"sepolia"`.
+
+  When set to `"mainnet"`, the frontend uses `NEXT_PUBLIC_FACTORY_ADDRESS_MAINNET` and the mainnet Zama KMS configuration. When omitted or set to `"sepolia"`, it uses `NEXT_PUBLIC_FACTORY_ADDRESS` and the Sepolia Zama configuration.
+
+  ```
+  NEXT_PUBLIC_NETWORK=mainnet
+  ```
+</ParamField>
+
+---
+
+## Relayer Credentials
+
+<ParamField query="GATEWAY_RELAYER_PRIVATE_KEY" type="string" required>
+  The private key of the relayer wallet. The relayer submits finalization transactions — such as `finalizeUnwrap` on the `ConfidentialWrapper` and `finalize` on the `ConfidentialPaymentRouterV2` — after the Zama KMS network produces a decryption proof.
+
+  The relayer wallet must hold enough ETH to cover gas for finalization transactions. It does not hold user funds and is non-custodial by design; any address can finalize a pending request on-chain.
+
+  ```
+  GATEWAY_RELAYER_PRIVATE_KEY=0xYourRelayerPrivateKey
+  ```
+
+  <Warning>
+    Never commit `GATEWAY_RELAYER_PRIVATE_KEY` to version control. Add `.env.local` to your `.gitignore` and rotate the key immediately if it is ever exposed.
+  </Warning>
+</ParamField>
+
+---
+
+## Zama Relayer Configuration
+
+<ParamField query="NEXT_PUBLIC_ZAMA_API_KEY" type="string">
+  Your Zama API key for the hosted mainnet relayer at `https://relayer.mainnet.zama.org`. Required when connecting to Zama's production KMS network and `NEXT_PUBLIC_USE_MINI_RELAYER` is not `"true"`.
+
+  For Sepolia testing the API key is not needed; the Sepolia relayer at `https://relayer.testnet.zama.org` accepts unauthenticated requests.
+
+  ```
+  NEXT_PUBLIC_ZAMA_API_KEY=your-zama-api-key
+  ```
+</ParamField>
+
+<ParamField query="NEXT_PUBLIC_USE_MINI_RELAYER" type="string">
+  Set to `"true"` to use the built-in mini-relayer instead of an external Zama-hosted relayer.
+
+  When enabled, the frontend's KMS decrypt requests are proxied through a Next.js API route at `/api/decrypt/user-decrypt`. This route forwards the request to the Zama KMS gateway using the server-side `GATEWAY_RELAYER_PRIVATE_KEY`, so `NEXT_PUBLIC_ZAMA_API_KEY` is not required.
+
+  This is the recommended mode for local development and for deployments where you do not have a Zama API key.
+
+  ```
+  NEXT_PUBLIC_USE_MINI_RELAYER=true
+  ```
+
+  <Note>
+    The mini-relayer proxies user-decrypt requests through `POST /api/decrypt/user-decrypt`. The route is implemented in `frontend/src/app/api/decrypt/user-decrypt/route.ts` and signs the gateway transaction with `GATEWAY_RELAYER_PRIVATE_KEY` before forwarding the request to the Zama Gateway Chain.
+  </Note>
+</ParamField>
+
+---
+
+## Example `.env.local`
+
+The following is a typical configuration for Sepolia development using the mini-relayer:
+
+```bash
+# Network
+NEXT_PUBLIC_NETWORK=sepolia
+
+# Factory addresses
+NEXT_PUBLIC_FACTORY_ADDRESS=0xYourSepoliaFactoryAddress
+NEXT_PUBLIC_FACTORY_ADDRESS_MAINNET=0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B
+
+# Relayer
+GATEWAY_RELAYER_PRIVATE_KEY=0xYourRelayerPrivateKey
+NEXT_PUBLIC_USE_MINI_RELAYER=true
+```
+
+For a mainnet deployment with the Zama hosted relayer:
+
+```bash
+# Network
+NEXT_PUBLIC_NETWORK=mainnet
+
+# Factory addresses
+NEXT_PUBLIC_FACTORY_ADDRESS_MAINNET=0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B
+
+# Relayer
+GATEWAY_RELAYER_PRIVATE_KEY=0xYourRelayerPrivateKey
+NEXT_PUBLIC_ZAMA_API_KEY=your-zama-api-key
+```

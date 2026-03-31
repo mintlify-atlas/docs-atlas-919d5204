@@ -1,0 +1,171 @@
+---
+title: "Private Portfolio"
+description: "View, wrap, unwrap, and decrypt your encrypted token balances across all supported assets."
+---
+
+The Private Portfolio page gives you a unified view of your token holdings — both standard public ERC-20 balances and encrypted cToken balances held in `ConfidentialWrapper` contracts. From a single interface you can wrap assets to make them private, unwrap them to reclaim plain ERC-20, and reveal your encrypted balances with a single wallet signature.
+
+---
+
+## What the Portfolio Scans
+
+When you open the portfolio, HideMe scans:
+
+1. **Public ERC-20 balances** — your plain token holdings for all assets that have a registered wrapper.
+2. **Encrypted cToken balances** — your FHE-encrypted balances in every `ConfidentialWrapper` deployed through `WrapperFactory`.
+
+Balances are shown per asset, with your encrypted balance displayed as `???` until you choose to decrypt.
+
+---
+
+## Three Main Actions
+
+<CardGroup cols={3}>
+  <Card title="Make Private" icon="lock">
+    Wrap a standard ERC-20 into an encrypted cToken. Your balance moves on-chain but becomes invisible.
+  </Card>
+  <Card title="Make Public" icon="lock-open">
+    Unwrap an encrypted cToken back to plain ERC-20 via a 2-step async process involving KMS threshold decryption.
+  </Card>
+  <Card title="Decrypt All" icon="eye">
+    Reveal all your encrypted balances at once with a single EIP-712 wallet signature — no transactions required.
+  </Card>
+</CardGroup>
+
+---
+
+## Make Private (Wrap)
+
+Wrapping converts a standard ERC-20 into an encrypted cToken balance stored in the corresponding `ConfidentialWrapper`.
+
+<Steps>
+  <Step title="Approve the wrapper">
+    Call `approve(wrapperAddress, amount)` on the ERC-20 contract to allow the wrapper to pull your tokens.
+  </Step>
+  <Step title="Call wrap()">
+    ```solidity
+    function wrap(uint256 amount) external;
+    ```
+    The wrapper pulls your ERC-20 via `safeTransferFrom`, adjusts for decimal differences, encrypts the result with `FHE.asEuint64()`, and adds it to your encrypted cToken balance.
+  </Step>
+</Steps>
+
+### Decimal adjustment
+
+All cTokens use 6 decimals regardless of the underlying asset. The wrapper automatically scales the amount:
+
+| Underlying decimals | Example | Adjustment |
+|---------------------|---------|------------|
+| 18 (e.g. WETH) | Wrap `1e18` wei | Stored as `1_000_000` (1.0 cWETH) |
+| 6 (e.g. USDC) | Wrap `1_000_000` | Stored as `1_000_000` (1.0 cUSDC) |
+| Less than 6 | Wrap `1` | Multiplied up to 6 decimals |
+
+<Info>
+  You can wrap multiple ERC-20s in a single session. The portfolio page supports batch wrapping — approving and wrapping several assets before leaving the page.
+</Info>
+
+---
+
+## Make Public (Unwrap)
+
+Unwrapping is a **2-step asynchronous process** because the contract must request a public decryption from the Zama KMS network to verify you have sufficient balance before releasing the underlying ERC-20.
+
+### Step 1 — Request unwrap
+
+```solidity
+function unwrap(uint64 amount) external returns (uint256 requestId);
+```
+
+- The contract computes `FHE.le(amount, balance)` to create an encrypted boolean `canUnwrap`.
+- `FHE.makePubliclyDecryptable(canUnwrap)` submits a decryption request to the Zama Gateway Chain.
+- Your account is immediately marked `isRestricted = true`.
+
+### Step 2 — Finalize (relayer)
+
+```solidity
+function finalizeUnwrap(
+    uint256 requestId,
+    bytes32[] calldata handlesList,
+    bytes calldata cleartexts,
+    bytes calldata decryptionProof
+) external;
+```
+
+The HideMe relayer monitors the Gateway Chain for the KMS threshold signatures and submits them automatically. `FHE.checkSignatures()` verifies the proof on-chain. If `canUnwrap == true`, your cToken balance is reduced and the underlying ERC-20 is transferred back to your wallet.
+
+<Warning>
+  While a pending unwrap request exists, your account is **restricted** (`isRestricted = true`). You cannot wrap, transfer cTokens, or initiate a new unwrap until the request is finalized or cancelled. This prevents double-spending during the async decryption window.
+</Warning>
+
+### Cancellation after timeout
+
+If the KMS decryption proof is not submitted within **1 day**, you can cancel the stuck request yourself:
+
+```solidity
+function cancelUnwrap(uint256 requestId) external;
+```
+
+Only the original requester can cancel, and only after `UNWRAP_TIMEOUT = 1 days` has elapsed. Cancelling clears the restriction without transferring any tokens.
+
+---
+
+## Decrypt All
+
+To reveal your encrypted balances you sign an EIP-712 message — no on-chain transaction is needed. The `decryptMultipleBalances()` function handles all cToken addresses in a single round trip to the Zama KMS:
+
+```typescript
+export async function decryptMultipleBalances(
+  pairs: Array<{ contractAddress: string; handle: string }>,
+  walletClient: {
+    signTypedData: (args: {
+      domain: Record<string, unknown>;
+      types: Record<string, Array<{ name: string; type: string }>>;
+      primaryType: string;
+      message: Record<string, unknown>;
+    }) => Promise<string>;
+    account: { address: string };
+  },
+): Promise<Map<string, bigint>>
+```
+
+**How it works:**
+
+<Steps>
+  <Step title="Generate a keypair">
+    The SDK generates a temporary public/private keypair used to re-encrypt your balances for local decryption.
+  </Step>
+  <Step title="Build and sign the EIP-712 message">
+    The signed message grants the KMS permission to re-encrypt your ciphertexts using the temporary public key, scoped to the specified contract addresses and a 10-day validity window.
+  </Step>
+  <Step title="Request decryption from KMS">
+    `fhevm.userDecrypt()` sends all handle/contract pairs and the signature to the Zama relayer. The KMS re-encrypts each balance under your temporary key.
+  </Step>
+  <Step title="Decrypt locally">
+    Your browser decrypts each value using the temporary private key. The result is a `Map<handle, bigint>` of plaintext balances — never sent to any server.
+  </Step>
+</Steps>
+
+---
+
+## Wrap / Unwrap Flow Summary
+
+```
+WRAP FLOW
+  You approve wrapper contract for ERC-20 amount
+  → wrap(amount) called
+  → ERC-20 transferred to wrapper via safeTransferFrom
+  → Decimal adjustment applied (e.g. 18→6 for WETH)
+  → FHE.asEuint64(adjusted) encrypts the amount on-chain
+  → Your cToken balance updated in encrypted storage
+
+UNWRAP FLOW
+  Step 1: You call unwrap(amount)
+    → FHE.le(amount, balance) creates encrypted canUnwrap boolean
+    → FHE.makePubliclyDecryptable(canUnwrap) triggers KMS request
+    → isRestricted[you] = true
+
+  Step 2: Relayer calls finalizeUnwrap(requestId, proof)
+    → FHE.checkSignatures() verifies KMS threshold signatures
+    → If canUnwrap == true: cToken burned, ERC-20 returned to you
+    → isRestricted[you] = false
+```

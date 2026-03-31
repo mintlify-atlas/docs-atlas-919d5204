@@ -1,0 +1,78 @@
+---
+title: 'Deployed addresses'
+description: 'Ethereum mainnet addresses for all HideMe contracts and Zama fhEVM infrastructure.'
+keywords: ['mainnet', 'deployed', 'addresses', 'etherscan', 'zama', 'fhevm', 'contracts']
+---
+
+All HideMe contracts are deployed on Ethereum mainnet and verified on Etherscan. There are no proxy patterns, no admin upgrade keys, and no owner controls — the contracts are immutable once deployed.
+
+<Note>
+  Individual token and wrapper addresses below (HideMeToken example, cWETH, cUSDC) are representative deployments created during testing. New tokens and wrappers are deployed by calling `HideMeFactory.createToken()` and `WrapperFactory.createWrapper()` respectively.
+</Note>
+
+## Core protocol contracts
+
+| Contract | Address | Etherscan |
+|---|---|---|
+| HideMeFactory | `0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B` | [View](https://etherscan.io/address/0x46E16F6E248dfa735D50345b1d2657C8dBC5d60B) |
+| WrapperFactory | `0xde8d3122329916968BA9c5E034Bbade431687408` | [View](https://etherscan.io/address/0xde8d3122329916968BA9c5E034Bbade431687408) |
+| ConfidentialPaymentRouterV2 | `0x087D50Bb21a4C7A5E9394E9739809cB3AA6576Fa` | [View](https://etherscan.io/address/0x087D50Bb21a4C7A5E9394E9739809cB3AA6576Fa) |
+| ConfidentialPayments | `0xA12c43CFCe337f0f8b831551Fbd273A61b0488d5` | [View](https://etherscan.io/address/0xA12c43CFCe337f0f8b831551Fbd273A61b0488d5) |
+
+## Deployed wrappers
+
+| Token | Symbol | Address | Etherscan |
+|---|---|---|---|
+| Confidential WETH | cWETH | `0x7a339078f9abde76c7cf9360238eafd2a64c0ee7` | [View](https://etherscan.io/address/0x7a339078f9abde76c7cf9360238eafd2a64c0ee7) |
+| Confidential USDC | cUSDC | `0x1704cd8697f1c4f21bab3e0c4cf149cb7b1e5147` | [View](https://etherscan.io/address/0x1704cd8697f1c4f21bab3e0c4cf149cb7b1e5147) |
+
+## Example HideMeToken
+
+| Token | Address | Etherscan |
+|---|---|---|
+| Example HideMeToken | `0x02FA7116A5653dfDFe51cF83F587CB80F560145d` | [View](https://etherscan.io/address/0x02FA7116A5653dfDFe51cF83F587CB80F560145d) |
+
+This token was deployed through `HideMeFactory` during mainnet testing. It demonstrates the full lifecycle: mint, encrypted transfer (client-side FHE), on-chain encrypted transfer (`transferPlaintext`), and burn.
+
+## Zama fhEVM infrastructure
+
+HideMe inherits `ZamaEthereumConfig`, which hard-codes the following Zama network addresses at compile time. These are shared infrastructure contracts operated by Zama and are not specific to HideMe.
+
+| Component | Address |
+|---|---|
+| ACL Contract | `0xcA2E8f1F656CD25C01F05d0b243Ab1ecd4a8ffb6` |
+| KMS Contract | `0x77627828a55156b04Ac0DC0eb30467f1a552BB03` |
+| InputVerifier | `0xCe0FC2e05CFff1B719EFF7169f7D80Af770c8EA2` |
+| Gateway Chain ID | `261131` |
+
+**ACL Contract** — Access control list that governs which Ethereum addresses are permitted to decrypt a given `euint64` ciphertext handle. Every balance update calls `FHE.allow(handle, address)` to register new access entries.
+
+**KMS Contract** — On-chain anchor for the Zama threshold key-management network. Stores the public keys used to verify KMS threshold signatures during `finalizeUnwrap` and other public decryption operations.
+
+**InputVerifier** — Validates zero-knowledge proofs attached to client-side encrypted inputs. Called automatically by `FHE.fromExternal()` when a user submits an encrypted transfer amount from the frontend.
+
+**Gateway Chain** — A separate EVM chain (Chain ID 261131) that coordinates public decryption requests. When `FHE.makePubliclyDecryptable()` is called on Ethereum, the Gateway chain orchestrates the KMS threshold signing and posts the decryption proof back to Ethereum for verification.
+
+<Warning>
+  These Zama infrastructure addresses are mainnet-specific. If you fork or redeploy HideMe to a testnet, you must use the corresponding testnet config base contract from the `@fhevm/solidity` package rather than `ZamaEthereumConfig`.
+</Warning>
+
+## Immutability
+
+None of the HideMe contracts use proxy patterns or upgradeable storage. There are no `owner` addresses with admin privileges at the protocol level (individual `HideMeToken` instances have an owner for minting and observer management, but the factory and payment contracts have no such controls). This means:
+
+- Contract logic cannot be modified after deployment.
+- There are no admin keys that could pause, drain, or upgrade the contracts.
+- The deployed bytecode on Etherscan is the final, canonical implementation.
+
+<CardGroup cols={3}>
+  <Card title="HideMeFactory" icon="industry" href="/contracts/hideme-factory">
+    Deploy new confidential tokens
+  </Card>
+  <Card title="ConfidentialWrapper" icon="box" href="/contracts/confidential-wrapper">
+    Wrap and unwrap ERC-20s
+  </Card>
+  <Card title="ConfidentialPaymentRouterV2" icon="route" href="/contracts/payment-router-v2">
+    Send any ERC-20 confidentially
+  </Card>
+</CardGroup>

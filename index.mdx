@@ -1,97 +1,68 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "HideMe — Confidential Token Infrastructure"
+description: "Create, transfer, and pay with fully encrypted ERC-20 tokens on Ethereum. Balances and amounts are invisible on-chain, powered by Fully Homomorphic Encryption via Zama's fhEVM."
 ---
 
-## Setting up
+HideMe brings financial privacy to Ethereum. Every balance and every transfer amount is stored as an FHE ciphertext — invisible to block explorers, indexers, and observers by default. You get the composability of ERC-20 with the privacy of fully encrypted state.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Connect your wallet and make your first confidential transfer in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="How it Works" icon="lock" href="/how-it-works">
+    Understand the FHE encryption model that keeps balances private on-chain.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Smart Contracts" icon="file-contract" href="/contracts/overview">
+    Explore the six deployed contracts powering HideMe on Ethereum mainnet.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Core Features" icon="shield-halved" href="/features/token-registry">
+    Browse the full feature set: token registry, encrypted transfers, private portfolio, and payments.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can do with HideMe
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Create confidential tokens" icon="coins" href="/features/token-registry">
+    Deploy a new encrypted ERC-20 in one transaction. Set supply, mintability, burn rules, and compliance observers.
+  </Card>
+  <Card title="Send encrypted transfers" icon="paper-plane" href="/features/encrypted-transfers">
+    Transfer tokens with amounts encrypted client-side using TFHE WASM. On-chain, only ciphertexts are visible.
+  </Card>
+  <Card title="Manage your private portfolio" icon="wallet" href="/features/private-portfolio">
+    Wrap existing ERC-20s (WETH, USDC) into confidential cTokens. Decrypt all balances with a single wallet signature.
+  </Card>
+  <Card title="Pay confidentially" icon="arrow-right-arrow-left" href="/features/confidential-payments">
+    Send any ERC-20 where the amount is encrypted on-chain. The receiver gets plain tokens — no FHE required on their end.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Get started
 
-## Need inspiration?
+<Steps>
+  <Step title="Connect your wallet">
+    Visit the HideMe app and connect a wallet with ETH on Ethereum mainnet using RainbowKit.
+  </Step>
+  <Step title="Create or find a confidential token">
+    Browse the token registry to find existing tokens, or create your own with custom supply and governance rules.
+  </Step>
+  <Step title="Transfer or wrap tokens">
+    Send encrypted transfers on HideMe tokens, or wrap your existing ERC-20s (WETH, USDC) into confidential cTokens via the portfolio page.
+  </Step>
+  <Step title="Decrypt your balance">
+    Click **Decrypt All** in the portfolio to reveal your private balances using an EIP-712 wallet signature — nothing is sent to any server.
+  </Step>
+</Steps>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+## Deployed on Ethereum mainnet
+
+HideMe contracts are live and verified on Ethereum mainnet. Every feature has on-chain transaction evidence.
+
+<CardGroup cols={2}>
+  <Card title="Contract Addresses" icon="map-pin" href="/contracts/deployed-addresses">
+    View all mainnet contract addresses with Etherscan links.
+  </Card>
+  <Card title="Development Setup" icon="terminal" href="/development/setup">
+    Run the frontend locally or deploy your own instance of the contracts.
+  </Card>
+</CardGroup>

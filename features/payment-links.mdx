@@ -1,0 +1,166 @@
+---
+title: "Payment Links"
+description: "Create shareable payment requests for HideMe confidential tokens. Merchants set a fixed amount; payers fulfill in one transaction."
+---
+
+Payment links let merchants create reusable payment requests tied to a specific HideMe confidential token and amount. When a payer fulfills the link, the transfer is encrypted on-chain via `transferPlaintext` — the on-chain balance changes are invisible even though the link amount is known off-chain.
+
+<Note>
+Payment links work with **HideMe native tokens** (deployed via HideMeFactory). For sending any ERC-20 confidentially, see [Confidential Payments](/features/confidential-payments).
+</Note>
+
+## How payment links work
+
+<Steps>
+  <Step title="Merchant creates a link">
+    Call `createPaymentLink()` on the ConfidentialPayments contract with the token address, amount, memo, and optional expiry. You receive a `bytes32` link ID.
+  </Step>
+  <Step title="Share the link ID">
+    Share the `linkId` with your customer. The HideMe app hosts a payer UI at `/pay/[txHash]` — pass the transaction hash of the `createPaymentLink` call. The app resolves the `linkId` from the transaction receipt and presents a payment form to the payer.
+  </Step>
+  <Step title="Payer fulfills the link">
+    The payer calls `payLink(linkId)`. The contract calls `token.transferPlaintext(merchant, amount)`, which encrypts the amount on-chain via FHE and transfers it from payer to merchant.
+  </Step>
+  <Step title="Link is marked paid">
+    Once paid, the link cannot be reused. The `LinkPaid` event is emitted with the payer address and timestamp.
+  </Step>
+</Steps>
+
+## Creating a payment link
+
+```solidity
+function createPaymentLink(
+    address token,
+    uint64 amount,
+    string calldata memo,
+    uint256 expiry
+) external returns (bytes32 linkId)
+```
+
+<ParamField path="token" type="address" required>
+  Address of the HideMeToken to charge. Must be a token deployed via HideMeFactory.
+</ParamField>
+
+<ParamField path="amount" type="uint64" required>
+  Amount in raw token units (6 decimals). For example, `50_000_000` = 50 tokens.
+</ParamField>
+
+<ParamField path="memo" type="string" required>
+  Human-readable description shown to the payer (e.g. `"Invoice #42"`, `"Monthly subscription"`).
+</ParamField>
+
+<ParamField path="expiry" type="uint256" required>
+  Unix timestamp after which the link expires. Pass `0` for no expiry.
+</ParamField>
+
+Returns a `bytes32 linkId` — the unique identifier for this payment link, derived from a keccak256 hash of the parameters and block timestamp.
+
+## Paying a link
+
+```solidity
+function payLink(bytes32 linkId) external
+```
+
+The caller's HideMeToken balance is charged. The token contract encrypts the transfer on-chain via `FHE.asEuint64(amount)` — no browser WASM required from the payer.
+
+<Warning>
+The payer must hold sufficient balance in the specified HideMeToken. If their encrypted balance is insufficient, the transfer silently sends 0 (standard FHE behavior) and the link is still marked as paid.
+</Warning>
+
+## Cancelling a link
+
+```solidity
+function cancelLink(bytes32 linkId) external
+```
+
+Only the merchant (link creator) can cancel an unpaid link. Cancelled links cannot be fulfilled. The `LinkCancelledEvent` event is emitted.
+
+## Querying links
+
+```solidity
+// Get all link IDs for a merchant
+function getMerchantLinks(address merchant) external view returns (bytes32[] memory)
+
+// Get full details for a link
+function getLink(bytes32 linkId) external view returns (
+    address token,
+    address merchant,
+    uint64 amount,
+    string memory memo,
+    uint256 expiry,
+    bool paid,
+    bool cancelled,
+    address payer,
+    uint256 paidAt
+)
+```
+
+## PaymentLink fields
+
+<ResponseField name="token" type="address">
+  The HideMeToken contract address.
+</ResponseField>
+
+<ResponseField name="merchant" type="address">
+  Address that created the link and will receive the payment.
+</ResponseField>
+
+<ResponseField name="amount" type="uint64">
+  Fixed payment amount in token units (6 decimals).
+</ResponseField>
+
+<ResponseField name="memo" type="string">
+  Human-readable description set at creation time.
+</ResponseField>
+
+<ResponseField name="expiry" type="uint256">
+  Unix timestamp for expiry. `0` means no expiry.
+</ResponseField>
+
+<ResponseField name="paid" type="bool">
+  Whether the link has been fulfilled.
+</ResponseField>
+
+<ResponseField name="cancelled" type="bool">
+  Whether the merchant cancelled the link.
+</ResponseField>
+
+<ResponseField name="payer" type="address">
+  Address that paid the link (`address(0)` if unpaid).
+</ResponseField>
+
+<ResponseField name="paidAt" type="uint256">
+  Block timestamp when payment was made (`0` if unpaid).
+</ResponseField>
+
+## Events
+
+| Event | Parameters | Description |
+|-------|-----------|-------------|
+| `LinkCreated` | `linkId, merchant, token` | Emitted when a new payment link is created |
+| `LinkPaid` | `linkId, payer, paidAt` | Emitted when a link is successfully paid |
+| `LinkCancelledEvent` | `linkId` | Emitted when a merchant cancels an unpaid link |
+
+## Custom errors
+
+| Error | When thrown |
+|-------|------------|
+| `LinkNotFound` | `linkId` does not exist |
+| `LinkAlreadyPaid` | Link has already been fulfilled |
+| `LinkExpired` | Current timestamp exceeds `expiry` |
+| `LinkNotExpired` | (reserved for future use) |
+| `NotMerchant` | Caller is not the link creator |
+| `LinkCancelled` | Link was cancelled by the merchant |
+
+## Contract address
+
+**Mainnet:** [`0xA12c43CFCe337f0f8b831551Fbd273A61b0488d5`](https://etherscan.io/address/0xA12c43CFCe337f0f8b831551Fbd273A61b0488d5)
+
+<CardGroup cols={2}>
+  <Card title="Confidential Payments" icon="arrow-right-arrow-left" href="/features/confidential-payments">
+    Send any ERC-20 with encrypted amounts using the payment router.
+  </Card>
+  <Card title="ConfidentialPayments Contract" icon="file-contract" href="/contracts/confidential-payments">
+    Full contract reference for ConfidentialPayments.
+  </Card>
+</CardGroup>
